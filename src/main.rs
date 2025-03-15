@@ -2,91 +2,82 @@ mod cli;
 mod conf;
 mod events;
 mod services;
-use crate::conf::Config;
-use crate::events::setup_fds;
-use crate::services::start_service;
-use clap::Parser;
-use cli::Cli;
-use nix::libc;
-use nix::sys::signal::Signal;
-use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-use std::collections::HashSet;
-use std::os::unix::io::AsRawFd;
-use std::{fs, io};
+use crate::conf::get_service_defs;
+use crate::events::setup_epoll;
+use crate::services::ServiceRegistry;
+use nix::sys::{
+    epoll::{EpollEvent, EpollTimeout},
+    signal::Signal,
+    signalfd::SignalFd,
+    wait::{waitpid, WaitPidFlag, WaitStatus},
+};
+use std::{io, os::unix::io::AsRawFd, process::exit};
+
+fn reap_children(registry: &mut ServiceRegistry) {
+    loop {
+        match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
+            Ok(WaitStatus::Exited(pid, status)) => {
+                if status != 0 {
+                    eprintln!("Critical Service Failed. Must Terminate...");
+                    exit(status);
+                }
+                registry.drop(pid);
+            }
+            Ok(WaitStatus::Signaled(pid, _, _)) => {
+                registry.drop(pid);
+            }
+            Ok(WaitStatus::StillAlive) => break,
+            Err(nix::errno::Errno::ECHILD) => break, // No more children
+            Err(e) => {
+                eprintln!("Error in waitpid: {:?}", e);
+                break;
+            }
+            _ => {}
+        }
+    }
+}
+
+fn handle_event_sigchld(signal_fd: &SignalFd, registry: &mut ServiceRegistry) -> io::Result<()> {
+    if let Some(signal) = signal_fd.read_signal()? {
+        if signal.ssi_signo == Signal::SIGCHLD as u32 {
+            reap_children(registry);
+        }
+    }
+    Ok(())
+}
+
+fn handle_event(
+    event: EpollEvent,
+    signal_fd: &SignalFd,
+    registry: &mut ServiceRegistry,
+) -> io::Result<()> {
+    if event.data() == signal_fd.as_raw_fd() as u64 {
+        handle_event_sigchld(signal_fd, registry)?;
+    }
+    Ok(())
+}
+
+fn handle_events(
+    num_fds: usize,
+    events: &[EpollEvent],
+    signal_fd: &SignalFd,
+    registry: &mut ServiceRegistry,
+) -> io::Result<()> {
+    for i in 0..num_fds as usize {
+        handle_event(events[i], signal_fd, registry)?;
+    }
+    Ok(())
+}
 
 fn main() -> io::Result<()> {
-    let cli = Cli::parse();
-
-    let config_str = fs::read_to_string(cli.config)?;
-    let config: Config = toml::from_str(&config_str).unwrap();
-
-    let mut pids = HashSet::new();
-
-    let (signal_fd, epoll_fd) = setup_fds()?;
-
-    // Start all services and collect PIDs
-    for service in &config.services {
-        match start_service(service) {
-            Ok(pid) => {
-                println!("Started '{}' with PID {}", service.name, pid);
-                pids.insert(pid);
-            }
-            Err(err) => eprintln!("Failed to start '{}': {:?}", service.name, err),
-        }
+    let service_defs = get_service_defs();
+    let mut registry = ServiceRegistry::new(&service_defs);
+    let (signal_fd, epoll) = setup_epoll()?;
+    while !registry.is_empty() {
+        let mut events = [EpollEvent::empty(); 10];
+        let num_fds = epoll.wait(&mut events, EpollTimeout::NONE)?;
+        handle_events(num_fds, &events, &signal_fd, &mut registry)?;
     }
-
-    // === Event Loop ===
-    while !pids.is_empty() {
-        let mut events: [libc::epoll_event; 10] = unsafe { std::mem::zeroed() };
-        let nfds = unsafe {
-            libc::epoll_wait(
-                epoll_fd,
-                events.as_mut_ptr(),
-                events.len() as i32,
-                -1, // Block indefinitely
-            )
-        };
-
-        if nfds < 0 {
-            if nix::errno::Errno::last() == nix::errno::Errno::EINTR {
-                continue; // Ignore signals that aren't from epoll
-            } else {
-                return Err(std::io::Error::last_os_error().into());
-            }
-        }
-
-        for i in 0..nfds as usize {
-            if events[i].u64 == signal_fd.as_raw_fd() as u64 {
-                // === Read from signalfd ===
-                let info = signal_fd.read_signal()?;
-                if let Some(signal) = info {
-                    if signal.ssi_signo == Signal::SIGCHLD as u32 {
-                        // === Reap child processes ===
-                        loop {
-                            match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
-                                Ok(WaitStatus::Exited(pid, status)) => {
-                                    println!("Child {} exited with status {}", pid, status);
-                                    pids.remove(&pid);
-                                }
-                                Ok(WaitStatus::Signaled(pid, sig, _)) => {
-                                    println!("Child {} killed by signal {:?}", pid, sig);
-                                    pids.remove(&pid);
-                                }
-                                Ok(WaitStatus::StillAlive) => break,
-                                Err(nix::errno::Errno::ECHILD) => break, // No more children
-                                Err(e) => {
-                                    eprintln!("Error in waitpid: {:?}", e);
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     println!("All services exited, shutting down cleanly.");
     Ok(())
 }
