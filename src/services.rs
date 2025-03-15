@@ -1,4 +1,4 @@
-use crate::conf::ServiceConf;
+use crate::{conf::ServiceConf, flush_pipe};
 use nix::{
     errno::Errno,
     libc,
@@ -7,7 +7,7 @@ use nix::{
 use std::{
     collections::HashMap,
     ffi::CString,
-    os::fd::{IntoRawFd, RawFd},
+    os::fd::{AsRawFd, IntoRawFd, OwnedFd, RawFd},
     sync::{Arc, Mutex},
 };
 use which::which;
@@ -58,6 +58,7 @@ impl ExecArgs {
 
 #[derive(Clone)]
 pub struct ServiceDef {
+    pub name: String,
     pub conf: ServiceConf,
     pub args: ExecArgs,
 }
@@ -65,6 +66,7 @@ pub struct ServiceDef {
 impl ServiceDef {
     pub fn new(conf: &ServiceConf) -> Self {
         Self {
+            name: conf.name.clone(),
             conf: conf.clone(),
             args: ExecArgs::new(&conf),
         }
@@ -72,10 +74,10 @@ impl ServiceDef {
 }
 
 pub struct RunningService {
-    // pub def: ServiceDef,
+    pub def: ServiceDef,
     pub pid: Pid,
-    pub stdout: RawFd,
-    pub stderr: RawFd,
+    pub stdout: OwnedFd,
+    pub stderr: OwnedFd,
 }
 
 impl RunningService {
@@ -89,10 +91,10 @@ impl RunningService {
                     libc::close(stderr_write.into_raw_fd());
                 }
                 Ok(Self {
-                    // def: def.clone(),
+                    def: def.clone(),
                     pid,
-                    stdout: stdout_read.into_raw_fd(),
-                    stderr: stderr_read.into_raw_fd(),
+                    stdout: stdout_read,
+                    stderr: stderr_read,
                 })
             }
             Ok(ForkResult::Child) => {
@@ -130,10 +132,17 @@ pub struct ServiceRegistry {
     stderr_map: HashMap<RawFd, RS>,
 }
 
+impl<'a> IntoIterator for &'a ServiceRegistry {
+    type Item = &'a RS;
+    type IntoIter = std::collections::hash_map::Values<'a, Pid, RS>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.pid_map.values()
+    }
+}
+
 impl ServiceRegistry {
     pub fn new(srvcs: &Vec<ServiceDef>) -> Self {
         let cap = srvcs.capacity();
-        let mut services = Vec::with_capacity(cap);
         let mut pid_map: HashMap<Pid, RS> = HashMap::with_capacity(cap);
         let mut stdout_map: HashMap<RawFd, RS> = HashMap::with_capacity(cap);
         let mut stderr_map: HashMap<RawFd, RS> = HashMap::with_capacity(cap);
@@ -142,10 +151,9 @@ impl ServiceRegistry {
             match RunningService::new(def) {
                 Ok(srvc) => {
                     let dat = Arc::new(Mutex::new(srvc));
-                    services.push(dat.clone());
                     pid_map.insert(dat.lock().unwrap().pid, dat.clone());
-                    stdout_map.insert(dat.lock().unwrap().stdout, dat.clone());
-                    stderr_map.insert(dat.lock().unwrap().stderr, dat.clone());
+                    stdout_map.insert(dat.lock().unwrap().stdout.as_raw_fd(), dat.clone());
+                    stderr_map.insert(dat.lock().unwrap().stderr.as_raw_fd(), dat.clone());
                 }
                 Err(e) => {
                     eprintln!("Failed to start {}: {:?}", def.conf.name, e);
@@ -171,23 +179,21 @@ impl ServiceRegistry {
     //     self.pid_map.get(&pid).cloned()
     // }
 
-    // pub fn from_stdout(&self, fd: RawFd) -> Option<RS> {
-    //     self.stdout_map.get(&fd).cloned()
-    // }
+    pub fn from_stdout(&self, fd: RawFd) -> Option<RS> {
+        self.stdout_map.get(&fd).cloned()
+    }
 
-    // pub fn from_stderr(&self, fd: RawFd) -> Option<RS> {
-    //     self.stdout_map.get(&fd).cloned()
-    // }
+    pub fn from_stderr(&self, fd: RawFd) -> Option<RS> {
+        self.stdout_map.get(&fd).cloned()
+    }
 
     pub fn drop(&mut self, pid: Pid) {
         if let Some(arc_srvc) = self.pid_map.get(&pid) {
             let srvc = arc_srvc.lock().unwrap();
-            self.stdout_map.remove(&srvc.stdout);
-            self.stderr_map.remove(&srvc.stderr);
-            unsafe {
-                libc::close(srvc.stdout);
-                libc::close(srvc.stderr);
-            }
+            flush_pipe(&srvc, srvc.stdout.as_raw_fd()).unwrap();
+            flush_pipe(&srvc, srvc.stderr.as_raw_fd()).unwrap();
+            self.stdout_map.remove(&srvc.stdout.as_raw_fd());
+            self.stderr_map.remove(&srvc.stderr.as_raw_fd());
         }
         self.pid_map.remove(&pid);
     }

@@ -27,7 +27,8 @@ pub fn get_service_defs() -> Vec<ServiceDef> {
     let cli = Cli::parse();
 
     let config_str = fs::read_to_string(cli.config).expect("Couldn't  read config file");
-    let config: Config = toml::from_str(&config_str).unwrap();
+
+    let config: Config = serde_json::from_str(&config_str).unwrap();
 
     config
         .services

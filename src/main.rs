@@ -5,13 +5,72 @@ mod services;
 use crate::conf::get_service_defs;
 use crate::events::setup_epoll;
 use crate::services::ServiceRegistry;
-use nix::sys::{
-    epoll::{EpollEvent, EpollTimeout},
-    signal::Signal,
-    signalfd::SignalFd,
-    wait::{waitpid, WaitPidFlag, WaitStatus},
+use nix::{
+    fcntl::{fcntl, FcntlArg},
+    sys::{
+        epoll::{EpollEvent, EpollTimeout},
+        signal::Signal,
+        signalfd::SignalFd,
+        wait::{waitpid, WaitPidFlag, WaitStatus},
+    },
+    unistd::read,
 };
-use std::{io, os::unix::io::AsRawFd, process::exit};
+use services::RunningService;
+use std::{
+    fs::OpenOptions,
+    io::{self, Write},
+    os::{fd::RawFd, unix::io::AsRawFd},
+    process::exit,
+};
+
+fn get_pipe_size(fd: RawFd) -> Result<i32, nix::Error> {
+    // Get the pipe buffer size using F_GETPIPE_SZ
+    fcntl(fd, FcntlArg::F_GETPIPE_SZ)
+}
+
+fn flush_pipe(srvc: &RunningService, fd: RawFd) -> io::Result<()> {
+    // Proceed with reading and flushing the pipe
+    let mut buffer = [0u8; 1024]; // Read up to 1024 bytes at a time
+
+    // Open the log file in append mode, creating it if it doesn't exist
+    let mut log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(format!("{}.log", &srvc.def.name))
+        .map_err(|e| {
+            eprintln!("Failed to open log file: {}", e);
+            e
+        })?;
+
+    loop {
+        match read(fd, &mut buffer) {
+            Ok(0) => break, // No more data to read, we're done
+            Ok(n) => {
+                log_file.write_all(&buffer[..n])?;
+            }
+            Err(e) => {
+                return Err(io::Error::new(io::ErrorKind::Other, e));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn flush_pipe_w_check(srvc: &RunningService, fd: RawFd) -> io::Result<()> {
+    // Check the pipe size before attempting to read
+    match get_pipe_size(fd) {
+        Ok(pipe_size) => {
+            // Set a threshold for when to flush based on the pipe size
+            if pipe_size > 1024 {
+                flush_pipe(srvc, fd)?;
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to get pipe size: {}", e);
+        }
+    }
+    Ok(())
+}
 
 fn reap_children(registry: &mut ServiceRegistry) {
     loop {
@@ -53,6 +112,13 @@ fn handle_event(
 ) -> io::Result<()> {
     if event.data() == signal_fd.as_raw_fd() as u64 {
         handle_event_sigchld(signal_fd, registry)?;
+    } else if let Some(srvc) = registry.from_stdout(event.data() as i32) {
+        let srvc_locked = srvc.lock().unwrap();
+        flush_pipe_w_check(&srvc_locked, srvc_locked.stdout.as_raw_fd())?;
+    } else if let Some(srvc) = registry.from_stderr(event.data() as i32) {
+        let srvc_locked = srvc.lock().unwrap();
+        flush_pipe_w_check(&srvc_locked, srvc_locked.stdout.as_raw_fd())?;
+    } else {
     }
     Ok(())
 }
@@ -72,7 +138,7 @@ fn handle_events(
 fn main() -> io::Result<()> {
     let service_defs = get_service_defs();
     let mut registry = ServiceRegistry::new(&service_defs);
-    let (signal_fd, epoll) = setup_epoll()?;
+    let (signal_fd, epoll) = setup_epoll(&mut registry)?;
     while !registry.is_empty() {
         let mut events = [EpollEvent::empty(); 10];
         let num_fds = epoll.wait(&mut events, EpollTimeout::NONE)?;
