@@ -1,85 +1,22 @@
-use crate::{conf::ServiceConf, flush_pipe};
+use crate::logging::{FileLogHandler, LogHandler};
+use crate::service_def::ServiceDef;
+use crate::stdio::StdIoBuf;
 use nix::{
     errno::Errno,
     fcntl::{fcntl, FcntlArg, OFlag},
     libc,
-    unistd::{fork, pipe, ForkResult, Pid},
+    unistd::{fork, pipe, read, ForkResult, Pid},
 };
-use std::{
-    collections::HashMap,
-    ffi::CString,
-    os::fd::{AsRawFd, IntoRawFd, OwnedFd, RawFd},
-    sync::{Arc, Mutex},
-};
-use which::which;
+use std::io;
+use std::os::fd::{AsRawFd, IntoRawFd, OwnedFd, RawFd};
 
-#[derive(Clone, Debug)]
-pub struct ExecArgs {
-    pub args: Vec<CString>,
-    pub argc: CString,
-}
-
-impl ExecArgs {
-    pub fn new(service: &ServiceConf) -> Self {
-        let self_path = which(&service.cmd).unwrap();
-
-        let argc = CString::new(
-            self_path
-                .to_str()
-                .expect("Path provided can't be turned into a string"),
-        )
-        .expect("Can't convert to CString");
-
-        let argv0 = std::path::Path::new(&self_path)
-            .file_name()
-            .expect("Failed to get program name")
-            .to_str()
-            .expect("Program name not valid UTF-8");
-
-        // Convert args into CStrings
-        let mut args: Vec<CString> = service
-            .args
-            .clone()
-            .into_iter()
-            .map(|s| CString::new(s).expect("Failed to create CString"))
-            .collect();
-
-        args.insert(0, CString::new(argv0).expect("Failed to create CString"));
-
-        Self { argc, args }
-    }
-
-    fn to_argv(&self) -> Vec<*const libc::c_char> {
-        let mut argv: Vec<*const libc::c_char> = self.args.iter().map(|s| s.as_ptr()).collect();
-
-        argv.push(std::ptr::null());
-        argv
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ServiceDef {
-    pub name: String,
-    pub conf: ServiceConf,
-    pub args: ExecArgs,
-}
-
-impl ServiceDef {
-    pub fn new(conf: &ServiceConf) -> Self {
-        Self {
-            name: conf.name.clone(),
-            conf: conf.clone(),
-            args: ExecArgs::new(conf),
-        }
-    }
-}
-
-#[derive(Debug)]
 pub struct RunningService {
     pub def: ServiceDef,
     pub pid: Pid,
     pub stdout: OwnedFd,
     pub stderr: OwnedFd,
+    pub stdout_buf: StdIoBuf,
+    pub stderr_buf: StdIoBuf,
 }
 
 fn set_fd_nonblocking(fd: RawFd) -> nix::Result<()> {
@@ -101,11 +38,21 @@ impl RunningService {
                 }
                 set_fd_nonblocking(stdout_read.as_raw_fd())?;
                 set_fd_nonblocking(stderr_read.as_raw_fd())?;
+                let stdout_file_logger = LogHandler::File(
+                    FileLogHandler::new(format!("{}_stdout.log", def.name)).unwrap(),
+                );
+                let stderr_file_logger = LogHandler::File(
+                    FileLogHandler::new(format!("{}_stderr.log", def.name)).unwrap(),
+                );
+                let stdout_buf = StdIoBuf::new(vec![stdout_file_logger]);
+                let stderr_buf = StdIoBuf::new(vec![stderr_file_logger]);
                 Ok(Self {
                     def: def.clone(),
                     pid,
                     stdout: stdout_read,
                     stderr: stderr_read,
+                    stdout_buf,
+                    stderr_buf,
                 })
             }
             Ok(ForkResult::Child) => {
@@ -133,79 +80,51 @@ impl RunningService {
             Err(e) => Err(e),
         }
     }
-}
 
-type RS = Arc<Mutex<RunningService>>;
+    fn flush_stdio_pipe(&mut self, fd: RawFd) -> io::Result<()> {
+        // Proceed with reading and flushing the pipe
+        const BUFSIZE: usize = 1024;
+        let mut buffer = [0u8; BUFSIZE]; // Read up to 1024 bytes at a time
 
-pub struct ServiceRegistry {
-    pid_map: HashMap<Pid, RS>,
-    stdout_map: HashMap<RawFd, RS>,
-    stderr_map: HashMap<RawFd, RS>,
-}
+        // pick the right buffer based on the fd
+        let stdio_buf = match fd {
+            val if val == self.stdout.as_raw_fd() => &mut self.stdout_buf,
+            val if val == self.stderr.as_raw_fd() => &mut self.stderr_buf,
+            _ => unreachable!(),
+        };
 
-impl<'a> IntoIterator for &'a ServiceRegistry {
-    type Item = &'a RS;
-    type IntoIter = std::collections::hash_map::Values<'a, Pid, RS>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.pid_map.values()
-    }
-}
-
-impl ServiceRegistry {
-    pub fn new(srvcs: &Vec<ServiceDef>) -> Self {
-        let cap = srvcs.capacity();
-        let mut pid_map: HashMap<Pid, RS> = HashMap::with_capacity(cap);
-        let mut stdout_map: HashMap<RawFd, RS> = HashMap::with_capacity(cap);
-        let mut stderr_map: HashMap<RawFd, RS> = HashMap::with_capacity(cap);
-        // Start all services and map their PIDs for quick lookup
-        for def in srvcs {
-            match RunningService::new(def) {
-                Ok(srvc) => {
-                    let dat = Arc::new(Mutex::new(srvc));
-                    pid_map.insert(dat.lock().unwrap().pid, dat.clone());
-                    stdout_map.insert(dat.lock().unwrap().stdout.as_raw_fd(), dat.clone());
-                    stderr_map.insert(dat.lock().unwrap().stderr.as_raw_fd(), dat.clone());
+        loop {
+            match read(fd, &mut buffer) {
+                Ok(0) => {
+                    break;
+                }
+                Ok(n) => {
+                    stdio_buf.write(&buffer[..n])?;
+                }
+                Err(Errno::EAGAIN) => {
+                    // we don't mind no more data because we already epoll the fd.
+                    // If we need to read more data we will be called again.
+                    break;
                 }
                 Err(e) => {
-                    eprintln!("Failed to start {}: {:?}", def.conf.name, e);
+                    return Err(io::Error::new(io::ErrorKind::Other, e));
                 }
             }
         }
-        Self {
-            pid_map,
-            stdout_map,
-            stderr_map,
-        }
+        Ok(())
     }
 
-    // pub fn num_services(&self) -> usize {
-    //     self.services.len()
-    // }
-
-    pub fn is_empty(&self) -> bool {
-        self.pid_map.is_empty()
+    pub fn flush_stdout_pipe(&mut self) -> io::Result<()> {
+        self.flush_stdio_pipe(self.stdout.as_raw_fd())
     }
 
-    // pub fn from_pid(&self, pid: Pid) -> Option<RS> {
-    //     self.pid_map.get(&pid).cloned()
-    // }
-
-    pub fn get_srvc_form_stdout(&self, fd: RawFd) -> Option<RS> {
-        self.stdout_map.get(&fd).cloned()
+    pub fn flush_stderr_pipe(&mut self) -> io::Result<()> {
+        self.flush_stdio_pipe(self.stderr.as_raw_fd())
     }
+}
 
-    pub fn get_srvc_from_stderr(&self, fd: RawFd) -> Option<RS> {
-        self.stdout_map.get(&fd).cloned()
-    }
-
-    pub fn drop(&mut self, pid: Pid) {
-        if let Some(arc_srvc) = self.pid_map.get(&pid) {
-            let srvc = arc_srvc.lock().unwrap();
-            flush_pipe(&srvc, srvc.stdout.as_raw_fd()).unwrap();
-            flush_pipe(&srvc, srvc.stderr.as_raw_fd()).unwrap();
-            self.stdout_map.remove(&srvc.stdout.as_raw_fd());
-            self.stderr_map.remove(&srvc.stderr.as_raw_fd());
-        }
-        self.pid_map.remove(&pid);
+impl Drop for RunningService {
+    fn drop(&mut self) {
+        todo!()
     }
 }

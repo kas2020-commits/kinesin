@@ -5,7 +5,7 @@ use nix::sys::{
 };
 use std::{io, os::unix::io::AsRawFd};
 
-use crate::services::ServiceRegistry;
+use crate::service_registry::ServiceRegistry;
 
 pub fn setup_epoll(registry: &ServiceRegistry) -> io::Result<(SignalFd, Epoll)> {
     // Setup the Signal Set

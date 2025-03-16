@@ -3,7 +3,7 @@ use std::fs;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-use crate::{cli::Cli, services::ServiceDef};
+use crate::{cli::Cli, service_def::ServiceDef};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServiceConf {
