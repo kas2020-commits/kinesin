@@ -106,19 +106,18 @@ fn handle_event_sigchld(signal_fd: &SignalFd, registry: &mut ServiceRegistry) ->
 }
 
 fn handle_event(
-    event: EpollEvent,
+    event: &EpollEvent,
     signal_fd: &SignalFd,
     registry: &mut ServiceRegistry,
 ) -> io::Result<()> {
     if event.data() == signal_fd.as_raw_fd() as u64 {
         handle_event_sigchld(signal_fd, registry)?;
-    } else if let Some(srvc) = registry.from_stdout(event.data() as i32) {
+    } else if let Some(srvc) = registry.get_srvc_form_stdout(event.data() as i32) {
         let srvc_locked = srvc.lock().unwrap();
         flush_pipe_w_check(&srvc_locked, srvc_locked.stdout.as_raw_fd())?;
-    } else if let Some(srvc) = registry.from_stderr(event.data() as i32) {
+    } else if let Some(srvc) = registry.get_srvc_from_stderr(event.data() as i32) {
         let srvc_locked = srvc.lock().unwrap();
         flush_pipe_w_check(&srvc_locked, srvc_locked.stdout.as_raw_fd())?;
-    } else {
     }
     Ok(())
 }
@@ -129,8 +128,8 @@ fn handle_events(
     signal_fd: &SignalFd,
     registry: &mut ServiceRegistry,
 ) -> io::Result<()> {
-    for i in 0..num_fds as usize {
-        handle_event(events[i], signal_fd, registry)?;
+    for event in events.iter().take(num_fds) {
+        handle_event(event, signal_fd, registry)?;
     }
     Ok(())
 }
@@ -138,7 +137,7 @@ fn handle_events(
 fn main() -> io::Result<()> {
     let service_defs = get_service_defs();
     let mut registry = ServiceRegistry::new(&service_defs);
-    let (signal_fd, epoll) = setup_epoll(&mut registry)?;
+    let (signal_fd, epoll) = setup_epoll(&registry)?;
     while !registry.is_empty() {
         let mut events = [EpollEvent::empty(); 10];
         let num_fds = epoll.wait(&mut events, EpollTimeout::NONE)?;

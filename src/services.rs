@@ -68,7 +68,7 @@ impl ServiceDef {
         Self {
             name: conf.name.clone(),
             conf: conf.clone(),
-            args: ExecArgs::new(&conf),
+            args: ExecArgs::new(conf),
         }
     }
 }
@@ -179,11 +179,11 @@ impl ServiceRegistry {
     //     self.pid_map.get(&pid).cloned()
     // }
 
-    pub fn from_stdout(&self, fd: RawFd) -> Option<RS> {
+    pub fn get_srvc_form_stdout(&self, fd: RawFd) -> Option<RS> {
         self.stdout_map.get(&fd).cloned()
     }
 
-    pub fn from_stderr(&self, fd: RawFd) -> Option<RS> {
+    pub fn get_srvc_from_stderr(&self, fd: RawFd) -> Option<RS> {
         self.stdout_map.get(&fd).cloned()
     }
 

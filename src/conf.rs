@@ -30,9 +30,5 @@ pub fn get_service_defs() -> Vec<ServiceDef> {
 
     let config: Config = serde_json::from_str(&config_str).unwrap();
 
-    config
-        .services
-        .iter()
-        .map(|conf| ServiceDef::new(conf))
-        .collect()
+    config.services.iter().map(ServiceDef::new).collect()
 }
