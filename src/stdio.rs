@@ -1,7 +1,7 @@
 use crate::logging::{Log, LogHandler, Logger};
 use std::io;
 
-const BUFSIZE: usize = 1024;
+const BUFSIZE: usize = 128;
 
 pub struct StdIoBuf {
     buf: [u8; BUFSIZE],
