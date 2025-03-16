@@ -29,22 +29,31 @@ impl StdIoBuf {
         Ok(())
     }
 
-    // TODO: make sure that if the log is bigger than the buffer to loop until
-    // the entire log has been written.
     pub fn write(&mut self, log: Log) -> io::Result<()> {
-        // Ensure that we don't write beyond the buffer's capacity
-        let available_space = BUFSIZE - self.len;
-        let data_to_write = std::cmp::min(available_space, log.len());
+        let mut log_left = log.len();
 
-        // Copy the data into the buffer
-        self.buf[self.len..self.len + data_to_write].copy_from_slice(&log[..data_to_write]);
+        while log_left > 0 {
+            // Ensure that we don't write beyond the buffer's capacity
+            let available_space = BUFSIZE - self.len;
+            let data_to_write = std::cmp::min(available_space, log_left);
 
-        // Update the buffer length
-        self.len += data_to_write;
+            // slice out the part of the log we're going to use
+            let start_idx = log.len() - log_left;
+            let slice = &log[start_idx..start_idx + data_to_write];
 
-        // If the buffer is full, flush it automatically
-        if self.len == BUFSIZE {
-            self.flush()?;
+            // Copy the data into the buffer
+            self.buf[self.len..self.len + data_to_write].copy_from_slice(slice);
+
+            // Update the buffer length
+            self.len += data_to_write;
+
+            // If the buffer is full, flush it automatically
+            if self.len == BUFSIZE {
+                self.flush()?;
+            }
+
+            // update the log amount left
+            log_left -= data_to_write;
         }
 
         Ok(())
