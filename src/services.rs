@@ -1,6 +1,7 @@
 use crate::{conf::ServiceConf, flush_pipe};
 use nix::{
     errno::Errno,
+    fcntl::{fcntl, FcntlArg, OFlag},
     libc,
     unistd::{fork, pipe, ForkResult, Pid},
 };
@@ -56,7 +57,7 @@ impl ExecArgs {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ServiceDef {
     pub name: String,
     pub conf: ServiceConf,
@@ -73,11 +74,19 @@ impl ServiceDef {
     }
 }
 
+#[derive(Debug)]
 pub struct RunningService {
     pub def: ServiceDef,
     pub pid: Pid,
     pub stdout: OwnedFd,
     pub stderr: OwnedFd,
+}
+
+fn set_fd_nonblocking(fd: RawFd) -> nix::Result<()> {
+    let bits = fcntl(fd, FcntlArg::F_GETFL)?;
+    let prev_flags = OFlag::from_bits_truncate(bits);
+    fcntl(fd, FcntlArg::F_SETFL(prev_flags | OFlag::O_NONBLOCK))?;
+    Ok(())
 }
 
 impl RunningService {
@@ -90,6 +99,8 @@ impl RunningService {
                     libc::close(stdout_write.into_raw_fd());
                     libc::close(stderr_write.into_raw_fd());
                 }
+                set_fd_nonblocking(stdout_read.as_raw_fd())?;
+                set_fd_nonblocking(stderr_read.as_raw_fd())?;
                 Ok(Self {
                     def: def.clone(),
                     pid,

@@ -6,6 +6,7 @@ use crate::conf::get_service_defs;
 use crate::events::setup_epoll;
 use crate::services::ServiceRegistry;
 use nix::{
+    errno::Errno,
     fcntl::{fcntl, FcntlArg},
     sys::{
         epoll::{EpollEvent, EpollTimeout},
@@ -30,7 +31,8 @@ fn get_pipe_size(fd: RawFd) -> Result<i32, nix::Error> {
 
 fn flush_pipe(srvc: &RunningService, fd: RawFd) -> io::Result<()> {
     // Proceed with reading and flushing the pipe
-    let mut buffer = [0u8; 1024]; // Read up to 1024 bytes at a time
+    const BUFSIZE: usize = 1024;
+    let mut buffer = [0u8; BUFSIZE]; // Read up to 1024 bytes at a time
 
     // Open the log file in append mode, creating it if it doesn't exist
     let mut log_file = OpenOptions::new()
@@ -44,9 +46,16 @@ fn flush_pipe(srvc: &RunningService, fd: RawFd) -> io::Result<()> {
 
     loop {
         match read(fd, &mut buffer) {
-            Ok(0) => break, // No more data to read, we're done
+            Ok(0) => {
+                break;
+            }
             Ok(n) => {
                 log_file.write_all(&buffer[..n])?;
+            }
+            Err(Errno::EAGAIN) => {
+                // we don't mind no more data because we already epoll the fd.
+                // If we need to read more data we will be called again.
+                break;
             }
             Err(e) => {
                 return Err(io::Error::new(io::ErrorKind::Other, e));
