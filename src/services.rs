@@ -125,6 +125,17 @@ impl RunningService {
 
 impl Drop for RunningService {
     fn drop(&mut self) {
-        todo!()
+        match self.flush_stdout_pipe() {
+            Ok(_) => (),
+            Err(e) => {
+                eprintln!("Flushing pipe failed: {}", e);
+            }
+        }
+        match self.flush_stderr_pipe() {
+            Ok(_) => (),
+            Err(e) => {
+                eprintln!("Flushing pipe failed: {}", e);
+            }
+        }
     }
 }
