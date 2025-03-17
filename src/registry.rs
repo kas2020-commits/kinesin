@@ -1,24 +1,23 @@
-use crate::service_def::ServiceDef;
-use crate::services::RunningService;
+use crate::{conf::Config, service::Service};
 use nix::{
     sys::wait::{waitpid, WaitPidFlag, WaitStatus},
     unistd::Pid,
 };
 use std::{
     collections::HashMap,
-    os::fd::{AsRawFd, RawFd},
+    os::fd::RawFd,
     process::exit,
     sync::{Arc, Mutex},
 };
-type RS = Arc<Mutex<RunningService>>;
+type RS = Arc<Mutex<Service>>;
 
-pub struct ServiceRegistry {
+pub struct Registry {
     pid_map: HashMap<Pid, RS>,
     stdout_map: HashMap<RawFd, RS>,
     stderr_map: HashMap<RawFd, RS>,
 }
 
-impl<'a> IntoIterator for &'a ServiceRegistry {
+impl<'a> IntoIterator for &'a Registry {
     type Item = &'a RS;
     type IntoIter = std::collections::hash_map::Values<'a, Pid, RS>;
     fn into_iter(self) -> Self::IntoIter {
@@ -26,30 +25,37 @@ impl<'a> IntoIterator for &'a ServiceRegistry {
     }
 }
 
-impl ServiceRegistry {
-    pub fn new(srvcs: &Vec<ServiceDef>) -> Self {
-        let cap = srvcs.capacity();
-        let mut pid_map: HashMap<Pid, RS> = HashMap::with_capacity(cap);
-        let mut stdout_map: HashMap<RawFd, RS> = HashMap::with_capacity(cap);
-        let mut stderr_map: HashMap<RawFd, RS> = HashMap::with_capacity(cap);
-        // Start all services and map their PIDs for quick lookup
-        for def in srvcs {
-            match RunningService::new(def) {
-                Ok(srvc) => {
-                    let dat = Arc::new(Mutex::new(srvc));
-                    pid_map.insert(dat.lock().unwrap().pid, dat.clone());
-                    stdout_map.insert(dat.lock().unwrap().stdout.as_raw_fd(), dat.clone());
-                    stderr_map.insert(dat.lock().unwrap().stderr.as_raw_fd(), dat.clone());
-                }
-                Err(e) => {
-                    eprintln!("Failed to start {}: {:?}", def.conf.name, e);
-                }
-            }
-        }
+impl Registry {
+    pub fn new() -> Self {
+        let pid_map: HashMap<Pid, RS> = HashMap::new();
+        let stdout_map: HashMap<RawFd, RS> = HashMap::new();
+        let stderr_map: HashMap<RawFd, RS> = HashMap::new();
         Self {
             pid_map,
             stdout_map,
             stderr_map,
+        }
+    }
+
+    pub fn start_services(&mut self, config: &Config) {
+        let cap = config.services.capacity();
+        self.pid_map.reserve(cap);
+        self.stdout_map.reserve(cap);
+        self.stderr_map.reserve(cap);
+        for def in &config.services {
+            match Service::new(def) {
+                Ok(srvc) => {
+                    let dat = Arc::new(Mutex::new(srvc));
+                    self.pid_map.insert(dat.lock().unwrap().pid, dat.clone());
+                    self.stdout_map
+                        .insert(dat.lock().unwrap().stdout.as_raw_fd(), dat.clone());
+                    self.stderr_map
+                        .insert(dat.lock().unwrap().stderr.as_raw_fd(), dat.clone());
+                }
+                Err(e) => {
+                    eprintln!("Failed to start {}: {:?}", def.name, e);
+                }
+            }
         }
     }
 
@@ -77,17 +83,9 @@ impl ServiceRegistry {
         }
     }
 
-    // pub fn num_services(&self) -> usize {
-    //     self.services.len()
-    // }
-
     pub fn is_empty(&self) -> bool {
         self.pid_map.is_empty()
     }
-
-    // pub fn from_pid(&self, pid: Pid) -> Option<RS> {
-    //     self.pid_map.get(&pid).cloned()
-    // }
 
     pub fn get_srvc_form_stdout(&self, fd: RawFd) -> Option<RS> {
         self.stdout_map.get(&fd).cloned()
