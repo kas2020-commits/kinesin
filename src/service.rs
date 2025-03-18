@@ -77,13 +77,13 @@ impl Service {
 
 impl Drop for Service {
     fn drop(&mut self) {
-        match self.stdout.read() {
+        match self.stdout.flush() {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Flushing pipe failed: {}", e);
             }
         }
-        match self.stderr.read() {
+        match self.stderr.flush() {
             Ok(_) => (),
             Err(e) => {
                 eprintln!("Flushing pipe failed: {}", e);

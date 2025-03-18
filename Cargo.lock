@@ -167,6 +167,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-uring"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab01638bb6a279897b7691f87f3f3c232451711fd419a69ced980ce61074fa46"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -237,6 +248,7 @@ name = "rs-init"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "io-uring",
  "nix",
  "serde",
  "serde_json",

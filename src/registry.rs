@@ -59,6 +59,8 @@ impl Registry {
         }
     }
 
+    // TODO: return a list of FDs that were being used by the child that have now
+    // been closed.
     pub fn reap_children(&mut self) {
         loop {
             match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
@@ -104,5 +106,11 @@ impl Registry {
             }
             self.pid_map.remove(&pid);
         }
+    }
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self::new()
     }
 }
