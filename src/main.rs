@@ -6,6 +6,7 @@ mod registry;
 mod service;
 mod stdio;
 mod supervisor;
+mod utils;
 use crate::cli::Cli;
 use crate::supervisor::Supervisor;
 use clap::Parser;

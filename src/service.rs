@@ -2,20 +2,13 @@ use crate::conf::ServiceConf;
 use crate::exec::execv;
 use crate::logging::{FileLogHandler, LogHandler};
 use crate::stdio::StdIo;
+use crate::utils::set_fd_nonblocking;
 use nix::{
     errno::Errno,
-    fcntl::{fcntl, FcntlArg, OFlag},
     libc,
     unistd::{fork, pipe, ForkResult, Pid},
 };
-use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
-
-fn set_fd_nonblocking(fd: RawFd) -> nix::Result<()> {
-    let bits = fcntl(fd, FcntlArg::F_GETFL)?;
-    let prev_flags = OFlag::from_bits_truncate(bits);
-    fcntl(fd, FcntlArg::F_SETFL(prev_flags | OFlag::O_NONBLOCK))?;
-    Ok(())
-}
+use std::os::fd::{AsRawFd, IntoRawFd};
 
 pub struct Service {
     pub name: String,

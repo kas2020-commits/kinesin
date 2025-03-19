@@ -1,4 +1,5 @@
-use io_uring::{cqueue, opcode, types, IoUring};
+use io_uring::{cqueue, opcode, squeue, types, IoUring};
+
 use nix::{
     libc::signalfd_siginfo,
     sys::{
@@ -8,12 +9,33 @@ use nix::{
 };
 use std::{io, mem, os::unix::io::AsRawFd};
 
-use crate::{conf::Config, registry::Registry};
+use crate::utils::set_fd_nonblocking;
+use crate::{conf::Config, registry::Registry, service::Service};
 
 const IO_URING_ENTRIES: u32 = 32;
 
 // This is based on the size of signalfd_siginfo, please do not change.
 const IO_URING_SIG_BUF_SIZE: usize = 128;
+
+fn mk_stderr_sqe(srvc: &mut Service) -> squeue::Entry {
+    opcode::Read::new(
+        types::Fd(srvc.stderr.fd.as_raw_fd()),
+        srvc.stderr.input_buffer.as_mut_ptr(),
+        srvc.stderr.input_buffer.len() as _,
+    )
+    .build()
+    .user_data(srvc.stderr.as_raw_fd() as u64)
+}
+
+fn mk_stdout_sqe(srvc: &mut Service) -> squeue::Entry {
+    opcode::Read::new(
+        types::Fd(srvc.stdout.fd.as_raw_fd()),
+        srvc.stdout.input_buffer.as_mut_ptr(),
+        srvc.stdout.input_buffer.len() as _,
+    )
+    .build()
+    .user_data(srvc.stdout.as_raw_fd() as u64)
+}
 
 pub struct Supervisor {
     config: Config,
@@ -37,6 +59,8 @@ impl Supervisor {
 
         // Create the fd for SIGCHLD
         let signal_fd = SignalFd::new(&sigset).unwrap();
+
+        set_fd_nonblocking(signal_fd.as_raw_fd()).expect("Couldn't set signal_fd to O_NONBLOCK");
 
         // Setup io_uring
         let ring = IoUring::new(IO_URING_ENTRIES).unwrap();
@@ -75,11 +99,11 @@ impl Supervisor {
             unsafe {
                 self.ring
                     .submission()
-                    .push(&srvc_locked.stdout.entry())
+                    .push(&mk_stdout_sqe(&mut srvc_locked))
                     .unwrap();
                 self.ring
                     .submission()
-                    .push(&srvc_locked.stderr.entry())
+                    .push(&mk_stderr_sqe(&mut srvc_locked))
                     .unwrap();
             }
         }
@@ -112,7 +136,7 @@ impl Supervisor {
             unsafe {
                 self.ring
                     .submission()
-                    .push(&srvc_locked.stdout.entry())
+                    .push(&mk_stdout_sqe(&mut srvc_locked))
                     .unwrap()
             };
         } else if let Some(srvc) = self.registry.get_srvc_from_stderr(usr_data as _) {
@@ -121,7 +145,7 @@ impl Supervisor {
             unsafe {
                 self.ring
                     .submission()
-                    .push(&srvc_locked.stderr.entry())
+                    .push(&mk_stderr_sqe(&mut srvc_locked))
                     .unwrap()
             };
         } else {
