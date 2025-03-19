@@ -67,12 +67,18 @@ impl Supervisor {
         Ok(())
     }
 
-    pub fn start(&mut self) -> io::Result<()> {
+    pub fn run(&mut self) -> io::Result<()> {
         self.registry.start_services(&self.config);
         for srvc in &self.registry {
             let srvc_locked = srvc.lock().unwrap();
-            srvc_locked.stdout.add_to_epoll(&self.epoll).unwrap();
-            srvc_locked.stderr.add_to_epoll(&self.epoll).unwrap();
+            self.epoll.add(
+                &srvc_locked.stdout.fd,
+                EpollEvent::new(EpollFlags::EPOLLIN, srvc_locked.stdout.as_raw_fd() as u64),
+            )?;
+            self.epoll.add(
+                &srvc_locked.stderr.fd,
+                EpollEvent::new(EpollFlags::EPOLLIN, srvc_locked.stderr.as_raw_fd() as u64),
+            )?;
         }
         while !self.registry.is_empty() {
             let num_fds = self

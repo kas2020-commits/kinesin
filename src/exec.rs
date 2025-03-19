@@ -2,7 +2,7 @@ use nix::libc;
 use std::ffi::CString;
 use which::which;
 
-pub fn execv(args: &Vec<String>) -> libc::c_int {
+pub fn execv(args: &[String]) -> libc::c_int {
     let self_path = which(&args[0]).unwrap();
 
     let argc = CString::new(
@@ -20,6 +20,7 @@ pub fn execv(args: &Vec<String>) -> libc::c_int {
 
     // Convert args into CStrings
     let mut argv_owned: Vec<CString> = args
+        .to_owned()
         .clone()
         .into_iter()
         .map(|s| CString::new(s).expect("Failed to create CString"))
