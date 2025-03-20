@@ -1,4 +1,4 @@
-use io_uring::{cqueue, opcode, squeue, types, IoUring};
+use io_uring::{opcode, types, IoUring};
 
 use nix::{
     libc::signalfd_siginfo,
@@ -9,56 +9,34 @@ use nix::{
 };
 use std::{io, mem, os::unix::io::AsRawFd};
 
+use super::SupervisorTrait;
+use crate::buffd::BufFd;
 use crate::utils::set_fd_nonblocking;
-use crate::{conf::Config, registry::Registry, service::Service};
+
+use super::Notification;
 
 const IO_URING_ENTRIES: u32 = 32;
 
 // This is based on the size of signalfd_siginfo, please do not change.
 const IO_URING_SIG_BUF_SIZE: usize = 128;
 
-fn mk_stderr_sqe(srvc: &mut Service) -> squeue::Entry {
-    opcode::Read::new(
-        types::Fd(srvc.stderr.fd.as_raw_fd()),
-        srvc.stderr.input_buffer.as_mut_ptr(),
-        srvc.stderr.input_buffer.len() as _,
-    )
-    .build()
-    .user_data(srvc.stderr.as_raw_fd() as u64)
-}
-
-fn mk_stdout_sqe(srvc: &mut Service) -> squeue::Entry {
-    opcode::Read::new(
-        types::Fd(srvc.stdout.fd.as_raw_fd()),
-        srvc.stdout.input_buffer.as_mut_ptr(),
-        srvc.stdout.input_buffer.len() as _,
-    )
-    .build()
-    .user_data(srvc.stdout.as_raw_fd() as u64)
-}
-
 pub struct Supervisor {
-    config: Config,
-    registry: Registry,
+    result: Option<i32>,
+    mask: SigSet,
     signal_fd: SignalFd,
     signal_buffer: [u8; IO_URING_SIG_BUF_SIZE],
     ring: IoUring,
 }
 
 impl Supervisor {
-    pub fn new(config: Config) -> Self {
-        let registry = Registry::new();
+    pub fn new() -> Self {
         let signal_buffer = [0; IO_URING_SIG_BUF_SIZE];
 
-        // Setup the Signal Set
-        let mut sigset = SigSet::empty();
-        sigset.add(Signal::SIGCHLD);
-
-        // Block SIGCHLD so it doesn't interrupt other syscalls
-        sigset.thread_block().unwrap();
+        // initialize the sigset
+        let mask = SigSet::empty();
 
         // Create the fd for SIGCHLD
-        let signal_fd = SignalFd::new(&sigset).unwrap();
+        let signal_fd = SignalFd::new(&mask).unwrap();
 
         set_fd_nonblocking(signal_fd.as_raw_fd()).expect("Couldn't set signal_fd to O_NONBLOCK");
 
@@ -66,15 +44,32 @@ impl Supervisor {
         let ring = IoUring::new(IO_URING_ENTRIES).unwrap();
 
         Self {
-            config,
-            registry,
+            result: None,
+            mask,
             signal_fd,
             ring,
             signal_buffer,
         }
     }
+}
 
-    fn submit_signal_to_ring(&mut self) {
+impl SupervisorTrait for Supervisor {
+    fn is_proactive(&self) -> bool {
+        true
+    }
+
+    fn is_oneshot(&self) -> bool {
+        true
+    }
+
+    fn proactive_result(&self) -> Option<i32> {
+        self.result
+    }
+
+    fn register_signal(&mut self, signal: Signal) {
+        self.mask.add(signal);
+        self.signal_fd.set_mask(&self.mask).unwrap();
+
         let signal_e = opcode::Read::new(
             types::Fd(self.signal_fd.as_raw_fd()),
             self.signal_buffer.as_mut_ptr(),
@@ -82,7 +77,6 @@ impl Supervisor {
         )
         .build()
         .user_data(self.signal_fd.as_raw_fd() as _);
-
         unsafe {
             self.ring
                 .submission()
@@ -91,26 +85,26 @@ impl Supervisor {
         }
     }
 
-    fn first_setup(&mut self) {
-        self.submit_signal_to_ring();
-        self.registry.start_services(&self.config);
-        for srvc in &self.registry {
-            let mut srvc_locked = srvc.lock().unwrap();
-            unsafe {
-                self.ring
-                    .submission()
-                    .push(&mk_stdout_sqe(&mut srvc_locked))
-                    .unwrap();
-                self.ring
-                    .submission()
-                    .push(&mk_stderr_sqe(&mut srvc_locked))
-                    .unwrap();
-            }
-        }
+    fn register_fd(&mut self, buf_fd: &mut BufFd) {
+        let entry = opcode::Read::new(
+            types::Fd(buf_fd.as_raw_fd()),
+            buf_fd.as_mut_ptr(),
+            buf_fd.capacity() as _,
+        )
+        .build()
+        .user_data(buf_fd.as_raw_fd() as u64);
+        unsafe { self.ring.submission().push(&entry).unwrap() };
     }
 
-    fn handle_cqe(&mut self, cqe: cqueue::Entry) -> io::Result<()> {
+    fn block_next_notif(&mut self) -> io::Result<Notification> {
+        self.ring.submit_and_wait(1)?;
+        let cqe = self
+            .ring
+            .completion()
+            .next()
+            .expect("No completion entries");
         let usr_data = cqe.user_data();
+        self.result = Some(cqe.result());
         if (usr_data as i32) == self.signal_fd.as_raw_fd() {
             let mut buffer = mem::MaybeUninit::<signalfd_siginfo>::uninit();
             let size = mem::size_of_val(&buffer);
@@ -121,46 +115,11 @@ impl Supervisor {
                 std::ptr::copy_nonoverlapping(sigbuf.as_ptr(), buffer_ptr, size);
             }
             let siginfo = unsafe { buffer.assume_init() };
-
-            match siginfo.ssi_signo {
-                x if x == Signal::SIGCHLD as u32 => {
-                    self.registry.reap_children();
-                }
-                _ => {}
-            }
-
-            self.submit_signal_to_ring();
-        } else if let Some(srvc) = self.registry.get_srvc_form_stdout(usr_data as _) {
-            let mut srvc_locked = srvc.lock().unwrap();
-            srvc_locked.stdout.pipe(cqe.result() as _)?;
-            unsafe {
-                self.ring
-                    .submission()
-                    .push(&mk_stdout_sqe(&mut srvc_locked))
-                    .unwrap()
-            };
-        } else if let Some(srvc) = self.registry.get_srvc_from_stderr(usr_data as _) {
-            let mut srvc_locked = srvc.lock().unwrap();
-            srvc_locked.stderr.pipe(cqe.result() as _)?;
-            unsafe {
-                self.ring
-                    .submission()
-                    .push(&mk_stderr_sqe(&mut srvc_locked))
-                    .unwrap()
-            };
+            Ok(Notification::Signal(Signal::try_from(
+                siginfo.ssi_signo as i32,
+            )?))
         } else {
-            eprintln!("Supervisor failed to match to a handler");
+            Ok(Notification::File(usr_data as i32))
         }
-        Ok(())
-    }
-
-    pub fn run(&mut self) -> io::Result<()> {
-        self.first_setup();
-        while !self.registry.is_empty() {
-            self.ring.submit_and_wait(1)?;
-            let cqe = self.ring.completion().next().expect("");
-            self.handle_cqe(cqe)?;
-        }
-        Ok(())
     }
 }

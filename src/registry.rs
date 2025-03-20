@@ -1,67 +1,54 @@
-use crate::{conf::Config, service::Service};
+use crate::{conf::ServiceConf, service::Service};
 use nix::{
     sys::wait::{waitpid, WaitPidFlag, WaitStatus},
     unistd::Pid,
 };
-use std::{
-    collections::HashMap,
-    os::fd::RawFd,
-    process::exit,
-    sync::{Arc, Mutex},
-};
-type RS = Arc<Mutex<Service>>;
+use std::{collections::HashMap, os::fd::RawFd, process::exit};
 
 pub struct Registry {
-    pid_map: HashMap<Pid, RS>,
-    stdout_map: HashMap<RawFd, RS>,
-    stderr_map: HashMap<RawFd, RS>,
+    service_map: HashMap<String, Service>,
 }
 
 impl<'a> IntoIterator for &'a Registry {
-    type Item = &'a RS;
-    type IntoIter = std::collections::hash_map::Values<'a, Pid, RS>;
+    type Item = &'a Service;
+    type IntoIter = std::collections::hash_map::Values<'a, String, Service>;
     fn into_iter(self) -> Self::IntoIter {
-        self.pid_map.values()
+        self.service_map.values()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut Registry {
+    type Item = &'a mut Service;
+    type IntoIter = std::collections::hash_map::ValuesMut<'a, String, Service>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.service_map.values_mut()
     }
 }
 
 impl Registry {
-    pub fn new() -> Self {
-        let pid_map: HashMap<Pid, RS> = HashMap::new();
-        let stdout_map: HashMap<RawFd, RS> = HashMap::new();
-        let stderr_map: HashMap<RawFd, RS> = HashMap::new();
-        Self {
-            pid_map,
-            stdout_map,
-            stderr_map,
-        }
-    }
-
-    pub fn start_services(&mut self, config: &Config) {
-        let cap = config.services.capacity();
-        self.pid_map.reserve(cap);
-        self.stdout_map.reserve(cap);
-        self.stderr_map.reserve(cap);
-        for def in &config.services {
+    pub fn new(services: &[ServiceConf]) -> Self {
+        let num_services = services.len();
+        let mut service_map: HashMap<String, Service> = HashMap::with_capacity(num_services);
+        for def in services {
             match Service::new(def) {
                 Ok(srvc) => {
-                    let dat = Arc::new(Mutex::new(srvc));
-                    self.pid_map.insert(dat.lock().unwrap().pid, dat.clone());
-                    self.stdout_map
-                        .insert(dat.lock().unwrap().stdout.as_raw_fd(), dat.clone());
-                    self.stderr_map
-                        .insert(dat.lock().unwrap().stderr.as_raw_fd(), dat.clone());
+                    if let Some(v) = service_map.insert(srvc.name.clone(), srvc) {
+                        eprintln!("Can't have services with the same key!");
+                        eprintln!("Service being replaced: {:#?}", &v);
+                        panic!();
+                    }
                 }
                 Err(e) => {
                     eprintln!("Failed to start {}: {:?}", def.name, e);
+                    panic!();
                 }
             }
         }
+        Self { service_map }
     }
 
-    // TODO: return a list of FDs that were being used by the child that have now
-    // been closed.
-    pub fn reap_children(&mut self) {
+    pub fn reap_children(&mut self) -> Vec<Pid> {
+        let mut pids = Vec::new();
         loop {
             match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
                 Ok(WaitStatus::Exited(pid, status)) => {
@@ -70,6 +57,7 @@ impl Registry {
                         exit(status);
                     }
                     self.drop(pid);
+                    pids.push(pid);
                 }
                 Ok(WaitStatus::Signaled(pid, _, _)) => {
                     self.drop(pid);
@@ -83,34 +71,35 @@ impl Registry {
                 _ => {}
             }
         }
+        pids
     }
 
     pub fn is_empty(&self) -> bool {
-        self.pid_map.is_empty()
+        self.service_map.is_empty()
     }
 
-    pub fn get_srvc_form_stdout(&self, fd: RawFd) -> Option<RS> {
-        self.stdout_map.get(&fd).cloned()
+    pub fn get_by_fd(&self, fd: RawFd) -> Option<&Service> {
+        self.service_map
+            .values()
+            .find(|&srvc| fd == srvc.stdout.as_raw_fd() || fd == srvc.stderr.as_raw_fd())
     }
 
-    pub fn get_srvc_from_stderr(&self, fd: RawFd) -> Option<RS> {
-        self.stdout_map.get(&fd).cloned()
+    pub fn get_by_fd_mut(&mut self, fd: RawFd) -> Option<&mut Service> {
+        self.service_map
+            .values_mut()
+            .find(|srvc| fd == srvc.stdout.as_raw_fd() || fd == srvc.stderr.as_raw_fd())
     }
 
     pub fn drop(&mut self, pid: Pid) {
-        if self.pid_map.contains_key(&pid) {
-            {
-                let srvc = self.pid_map.get(&pid).unwrap().lock().unwrap();
-                self.stdout_map.remove(&srvc.stdout.as_raw_fd());
-                self.stderr_map.remove(&srvc.stderr.as_raw_fd());
+        let mut name: Option<String> = None;
+        for srvc in self.service_map.values() {
+            if srvc.pid == pid {
+                name = Some(srvc.name.clone());
+                break;
             }
-            self.pid_map.remove(&pid);
         }
-    }
-}
-
-impl Default for Registry {
-    fn default() -> Self {
-        Self::new()
+        if let Some(srvc_name) = name {
+            self.service_map.remove(&srvc_name);
+        }
     }
 }

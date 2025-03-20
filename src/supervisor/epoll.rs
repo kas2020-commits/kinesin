@@ -5,87 +5,96 @@ use nix::sys::{
 };
 use std::{io, os::unix::io::AsRawFd};
 
-use crate::{conf::Config, registry::Registry};
+use crate::utils::set_fd_nonblocking;
+
+use super::{Notification, SupervisorTrait};
 
 pub struct Supervisor {
-    config: Config,
-    registry: Registry,
-    event_buffer: [EpollEvent; 10],
+    mask: SigSet,
+    event_buffer: [EpollEvent; 1],
     signal_fd: SignalFd,
     epoll: Epoll,
 }
 
 impl Supervisor {
-    pub fn new(config: Config) -> Self {
-        let registry = Registry::new();
-        let event_buffer = [EpollEvent::empty(); 10];
+    pub fn new() -> Self {
+        let event_buffer = [EpollEvent::empty(); 1];
 
         // Setup the Signal Set
-        let mut sigset = SigSet::empty();
-        sigset.add(Signal::SIGCHLD);
-
-        // Block SIGCHLD so it doesn't interrupt other syscalls
-        sigset.thread_block().unwrap();
+        let mask = SigSet::empty();
 
         // Create the fd for SIGCHLD
-        let signal_fd = SignalFd::new(&sigset).unwrap();
+        let signal_fd = SignalFd::new(&mask).unwrap();
 
         // create epoll
         let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+
+        set_fd_nonblocking(signal_fd.as_raw_fd()).expect("Couldn't set signal_fd to O_NONBLOCK");
 
         // Register the signal fd with epoll
         let event = EpollEvent::new(EpollFlags::EPOLLIN, signal_fd.as_raw_fd() as u64);
         epoll.add(&signal_fd, event).unwrap();
 
         Self {
-            config,
-            registry,
+            mask,
             event_buffer,
             signal_fd,
             epoll,
         }
     }
+}
 
-    fn handle_events(&mut self, num_fds: usize) -> io::Result<()> {
-        let events = &self.event_buffer[..num_fds];
-        for event in events {
-            let data = event.data();
-            if data == self.signal_fd.as_raw_fd() as u64 {
-                if let Some(signal) = self.signal_fd.read_signal()? {
-                    if signal.ssi_signo == Signal::SIGCHLD as u32 {
-                        self.registry.reap_children();
-                    }
-                }
-            } else if let Some(srvc) = self.registry.get_srvc_form_stdout(data as i32) {
-                let mut srvc = srvc.lock().unwrap();
-                srvc.stdout.read()?;
-            } else if let Some(srvc) = self.registry.get_srvc_from_stderr(data as i32) {
-                let mut srvc = srvc.lock().unwrap();
-                srvc.stderr.read()?;
-            }
-        }
-        Ok(())
+impl SupervisorTrait for Supervisor {
+    fn is_proactive(&self) -> bool {
+        false
     }
 
-    pub fn run(&mut self) -> io::Result<()> {
-        self.registry.start_services(&self.config);
-        for srvc in &self.registry {
-            let srvc_locked = srvc.lock().unwrap();
-            self.epoll.add(
-                &srvc_locked.stdout.fd,
-                EpollEvent::new(EpollFlags::EPOLLIN, srvc_locked.stdout.as_raw_fd() as u64),
-            )?;
-            self.epoll.add(
-                &srvc_locked.stderr.fd,
-                EpollEvent::new(EpollFlags::EPOLLIN, srvc_locked.stderr.as_raw_fd() as u64),
-            )?;
+    fn is_oneshot(&self) -> bool {
+        false
+    }
+
+    fn proactive_result(&self) -> Option<i32> {
+        None
+    }
+
+    fn register_signal(&mut self, signal: Signal) {
+        self.mask.add(signal);
+        self.signal_fd.set_mask(&self.mask).unwrap();
+    }
+
+    fn register_fd(&mut self, buf_fd: &mut crate::buffd::BufFd) {
+        self.epoll
+            .add(
+                buf_fd.as_fd(),
+                EpollEvent::new(EpollFlags::EPOLLIN, buf_fd.as_raw_fd() as u64),
+            )
+            .unwrap();
+    }
+
+    fn block_next_notif(&mut self) -> io::Result<Notification> {
+        let num_fds = self
+            .epoll
+            .wait(&mut self.event_buffer, EpollTimeout::NONE)?;
+
+        if num_fds > 1 {
+            eprintln!("Epoll reported more FDs than was given in the buffer.");
+            panic!();
         }
-        while !self.registry.is_empty() {
-            let num_fds = self
-                .epoll
-                .wait(&mut self.event_buffer, EpollTimeout::NONE)?;
-            self.handle_events(num_fds)?;
+
+        let event = self.event_buffer[0];
+        let data = event.data();
+
+        if data == self.signal_fd.as_raw_fd() as u64 {
+            let siginfo = self.signal_fd.read_signal()?;
+            if let Some(sig) = siginfo {
+                Ok(Notification::Signal(Signal::try_from(
+                    sig.ssi_signo as i32,
+                )?))
+            } else {
+                panic!();
+            }
+        } else {
+            Ok(Notification::File(data as _))
         }
-        Ok(())
     }
 }
