@@ -1,3 +1,10 @@
+mod interface;
+mod notification;
+
+pub use notification::Notification;
+
+pub use interface::SupervisorTrait;
+
 #[cfg(all(feature = "io-uring", target_os = "linux"))]
 mod io_uring;
 
@@ -10,8 +17,8 @@ mod epoll;
 #[cfg(all(not(feature = "io-uring"), target_os = "linux"))]
 pub use epoll::Supervisor;
 
-#[cfg(all(any(target_os = "macos", target_os = "freebsd", target_os = "openbsd")))]
+#[cfg(any(target_os = "macos", target_os = "freebsd", target_os = "openbsd"))]
 mod kqueue;
 
-#[cfg(all(any(target_os = "macos", target_os = "freebsd", target_os = "openbsd")))]
+#[cfg(any(target_os = "macos", target_os = "freebsd", target_os = "openbsd"))]
 pub use kqueue::Supervisor;

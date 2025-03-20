@@ -1,7 +1,6 @@
+use crate::buffd::BufFd;
 use crate::conf::ServiceConf;
 use crate::exec::execv;
-use crate::logging::{FileLogHandler, LogHandler};
-use crate::stdio::StdIo;
 use crate::utils::set_fd_nonblocking;
 use nix::{
     errno::Errno,
@@ -10,11 +9,12 @@ use nix::{
 };
 use std::os::fd::{AsRawFd, IntoRawFd};
 
+#[derive(Debug)]
 pub struct Service {
     pub name: String,
     pub pid: Pid,
-    pub stdout: StdIo,
-    pub stderr: StdIo,
+    pub stdout: BufFd,
+    pub stderr: BufFd,
 }
 
 impl Service {
@@ -30,14 +30,8 @@ impl Service {
                 }
                 set_fd_nonblocking(stdout_read.as_raw_fd())?;
                 set_fd_nonblocking(stderr_read.as_raw_fd())?;
-                let stdout_file_logger = LogHandler::File(
-                    FileLogHandler::new(format!("{}_stdout.log", def.name)).unwrap(),
-                );
-                let stderr_file_logger = LogHandler::File(
-                    FileLogHandler::new(format!("{}_stderr.log", def.name)).unwrap(),
-                );
-                let stdout = StdIo::new(stdout_read, vec![stdout_file_logger]);
-                let stderr = StdIo::new(stderr_read, vec![stderr_file_logger]);
+                let stdout = BufFd::new(stdout_read);
+                let stderr = BufFd::new(stderr_read);
                 Ok(Self {
                     name,
                     pid,
@@ -64,23 +58,6 @@ impl Service {
                 }
             }
             Err(e) => Err(e),
-        }
-    }
-}
-
-impl Drop for Service {
-    fn drop(&mut self) {
-        match self.stdout.flush() {
-            Ok(_) => (),
-            Err(e) => {
-                eprintln!("Flushing pipe failed: {}", e);
-            }
-        }
-        match self.stderr.flush() {
-            Ok(_) => (),
-            Err(e) => {
-                eprintln!("Flushing pipe failed: {}", e);
-            }
         }
     }
 }
