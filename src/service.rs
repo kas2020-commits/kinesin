@@ -1,3 +1,8 @@
+//! Defines a service protocol and manages it from start to finish.
+//!
+//! The service is concerned with everything relating to per-process management.
+//! Open file descriptors, environment variables, the process ID, etc are all
+//! managed here.
 use crate::buffd::BufFd;
 use crate::conf::ServiceConf;
 use crate::exec::execv;

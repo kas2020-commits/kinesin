@@ -1,3 +1,4 @@
+//! Uses clap to define the CLI interface declaratively.
 use std::path::PathBuf;
 
 use clap::{command, Parser};

@@ -9,18 +9,16 @@ use nix::{
 };
 use std::{io, mem, os::unix::io::AsRawFd};
 
-use super::SupervisorTrait;
+use super::{AioDriver, Notification};
 use crate::buffd::BufFd;
 use crate::utils::set_fd_nonblocking;
-
-use super::Notification;
 
 const IO_URING_ENTRIES: u32 = 32;
 
 // This is based on the size of signalfd_siginfo, please do not change.
 const IO_URING_SIG_BUF_SIZE: usize = 128;
 
-pub struct Supervisor {
+pub struct IoUringDriver {
     result: Option<i32>,
     mask: SigSet,
     signal_fd: SignalFd,
@@ -28,7 +26,7 @@ pub struct Supervisor {
     ring: IoUring,
 }
 
-impl Supervisor {
+impl IoUringDriver {
     pub fn new() -> Self {
         let signal_buffer = [0; IO_URING_SIG_BUF_SIZE];
 
@@ -53,7 +51,7 @@ impl Supervisor {
     }
 }
 
-impl SupervisorTrait for Supervisor {
+impl AioDriver for IoUringDriver {
     fn is_proactive(&self) -> bool {
         true
     }

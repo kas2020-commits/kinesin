@@ -5,13 +5,13 @@ use kqueue_sys::{kevent, kqueue, EventFilter, EventFlag, FilterFlag};
 use nix::errno::Errno;
 use nix::sys::signal::Signal;
 
-use super::SupervisorTrait;
+use super::AsDriver;
 
-pub struct Supervisor {
+pub struct KqueueDriver {
     kq: OwnedFd,
 }
 
-impl Supervisor {
+impl KqueueDriver {
     pub fn new() -> Self {
         let kq_fd = unsafe { kqueue() };
         if kq_fd == -1 {
@@ -23,7 +23,7 @@ impl Supervisor {
     }
 }
 
-impl SupervisorTrait for Supervisor {
+impl AsDriver for KqueueDriver {
     fn is_proactive(&self) -> bool {
         false
     }

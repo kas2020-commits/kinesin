@@ -1,3 +1,10 @@
+//! Register services and manage them through instance lifetimes.
+//!
+//! This structure provides a mechanism for bringing up services but more
+//! importantly for owning services. Services are brought online and teared down
+//! through lifetime semantics, so by simply dropping ownership of the service
+//! struct, you initiate the kill sequence. This model treats services as
+//! resources that get cleaned up through scope, which is extremely handy.
 use crate::{conf::ServiceConf, service::Service};
 use nix::{
     sys::wait::{waitpid, WaitPidFlag, WaitStatus},

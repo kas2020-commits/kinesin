@@ -1,4 +1,10 @@
-use crate::logging::{LogHandler, Logger};
+//! Bus protocol for connecting consumers to producers
+//!
+//! The Bus has an internal bytes buffer which it uses to more efficiently
+//! distribute data. Ownership-wise, the Bus is designed to own the consumers
+//! but not to own the producers. It's essentially treated as an open well
+//! that you throw data into and hope it reaches the right location.
+use crate::consumer::Consumer;
 use std::io;
 
 const IO_BUFSIZE: usize = 10;
@@ -6,11 +12,11 @@ const IO_BUFSIZE: usize = 10;
 pub struct Bus {
     buffer: [u8; IO_BUFSIZE],
     len: usize,
-    consumers: Vec<LogHandler>,
+    consumers: Vec<Consumer>,
 }
 
 impl Bus {
-    pub fn new(consumers: Vec<LogHandler>) -> Self {
+    pub fn new(consumers: Vec<Consumer>) -> Self {
         Self {
             buffer: [0; IO_BUFSIZE],
             len: 0,
@@ -20,8 +26,8 @@ impl Bus {
 
     pub fn flush(&mut self) -> io::Result<()> {
         // Execute all callbacks on the current buffer
-        for callback in &mut self.consumers {
-            callback.log(&self.buffer[..self.len])?;
+        for consumer in &mut self.consumers {
+            consumer.write(&self.buffer[..self.len])?;
         }
 
         // Reset the buffer after flushing

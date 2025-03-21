@@ -7,16 +7,16 @@ use std::{io, os::unix::io::AsRawFd};
 
 use crate::utils::set_fd_nonblocking;
 
-use super::{Notification, SupervisorTrait};
+use super::{AioDriver, Notification};
 
-pub struct Supervisor {
+pub struct EpollDriver {
     mask: SigSet,
     event_buffer: [EpollEvent; 1],
     signal_fd: SignalFd,
     epoll: Epoll,
 }
 
-impl Supervisor {
+impl EpollDriver {
     pub fn new() -> Self {
         let event_buffer = [EpollEvent::empty(); 1];
 
@@ -44,7 +44,7 @@ impl Supervisor {
     }
 }
 
-impl SupervisorTrait for Supervisor {
+impl AioDriver for EpollDriver {
     fn is_proactive(&self) -> bool {
         false
     }
