@@ -31,7 +31,6 @@ where
     }
 
     fn handle_fd(&mut self, fd: i32) -> io::Result<()> {
-        let is_proactive = self.driver.is_proactive();
         if let Some(srvc) = self.registry.get_by_fd_mut(fd) {
             let buf_fd = if srvc.stdout.as_raw_fd() == fd {
                 &mut srvc.stdout
@@ -40,11 +39,14 @@ where
             } else {
                 unreachable!()
             };
-            if is_proactive {
-                let res = self.driver.proactive_result().unwrap();
-                buf_fd.set_len(res as _);
+            if let Some(data) = self.driver.get_data() {
+                if self.driver.is_proactive() {
+                    buf_fd.set_len(data as _);
+                } else {
+                    buf_fd.read(Some(data as _))?;
+                }
             } else {
-                buf_fd.read()?;
+                buf_fd.read(None)?;
             }
             let dat = buf_fd.data();
             if let Some(bus) = self.bus_map.get_mut(&fd) {

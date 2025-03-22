@@ -1,4 +1,4 @@
-//! An owned file descriptor with a co-located buffer attached.
+//! An owned file descriptor to a stream-oriented file and a co-located buffer.
 //!
 //! This abstraction comes in handy when needing to bundle together a file
 //! descriptor with an associated bytes buffer to perform I/O, where the driver
@@ -11,7 +11,7 @@ use nix::errno::Errno;
 
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 
-const IO_BUFSIZE: usize = 10;
+const IO_BUFSIZE: usize = 1024;
 
 #[derive(Debug)]
 pub struct BufFd {
@@ -62,13 +62,21 @@ impl BufFd {
         &self.buffer[..self.curr_len]
     }
 
-    pub fn read(&mut self) -> Result<(), Errno> {
+    pub fn read(&mut self, bytes_ready: Option<usize>) -> Result<(), Errno> {
         match nix::unistd::read(self.fd.as_raw_fd(), &mut self.buffer) {
             Ok(0) => {
                 self.curr_len = 0;
                 Ok(())
             }
             Ok(n) => {
+                if let Some(num_bytes_ready) = bytes_ready {
+                    if n < num_bytes_ready {
+                        eprintln!(
+                            "Was told {} bytes were ready, but only read {} bytes instead",
+                            num_bytes_ready, n
+                        );
+                    }
+                }
                 self.curr_len = n;
                 Ok(())
             }
