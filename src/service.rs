@@ -5,7 +5,7 @@
 //! managed here.
 use crate::buffd::BufFd;
 use crate::conf::ServiceConf;
-use crate::exec::execv;
+use crate::exec::execve;
 use crate::utils::set_fd_nonblocking;
 use nix::{
     errno::Errno,
@@ -52,7 +52,7 @@ impl Service {
                     libc::close(stdout_read.into_raw_fd());
                     libc::close(stderr_read.into_raw_fd());
                 }
-                match execv(&def.exec) {
+                match execve(&def.exec, &def.env) {
                     -1 => {
                         eprintln!("execv errored");
                         std::process::exit(1);

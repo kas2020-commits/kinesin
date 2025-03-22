@@ -35,6 +35,9 @@ pub struct ServiceConf {
     pub stderr: bool,
 
     pub exec: Vec<String>,
+
+    #[serde(default = "default_cfg_env")]
+    pub env: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -55,4 +58,8 @@ fn default_cfg_stdout() -> bool {
 
 fn default_cfg_stderr() -> bool {
     true
+}
+
+fn default_cfg_env() -> Vec<String> {
+    Vec::new()
 }
