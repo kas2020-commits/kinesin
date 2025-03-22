@@ -9,7 +9,7 @@ use nix::{
 };
 use std::{io, mem, os::unix::io::AsRawFd};
 
-use super::{AioDriver, Notification};
+use super::{AsDriver, Notification};
 use crate::buffd::BufFd;
 use crate::utils::set_fd_nonblocking;
 
@@ -19,7 +19,7 @@ const IO_URING_ENTRIES: u32 = 32;
 const IO_URING_SIG_BUF_SIZE: usize = 128;
 
 pub struct IoUringDriver {
-    result: Option<i32>,
+    result: Option<i64>,
     mask: SigSet,
     signal_fd: SignalFd,
     signal_buffer: [u8; IO_URING_SIG_BUF_SIZE],
@@ -49,9 +49,21 @@ impl IoUringDriver {
             signal_buffer,
         }
     }
+
+    fn load_from_sigbuf(&self, n: usize) -> signalfd_siginfo {
+        let mut buffer = mem::MaybeUninit::<signalfd_siginfo>::uninit();
+        let size = mem::size_of_val(&buffer);
+        let sigbuf = &self.signal_buffer[..n];
+        let buffer_ptr = buffer.as_mut_ptr() as *mut u8;
+        unsafe {
+            // Copy the data from sigbuf into the uninitialized buffer
+            std::ptr::copy_nonoverlapping(sigbuf.as_ptr(), buffer_ptr, size);
+        }
+        unsafe { buffer.assume_init() }
+    }
 }
 
-impl AioDriver for IoUringDriver {
+impl AsDriver for IoUringDriver {
     fn is_proactive(&self) -> bool {
         true
     }
@@ -60,7 +72,7 @@ impl AioDriver for IoUringDriver {
         true
     }
 
-    fn proactive_result(&self) -> Option<i32> {
+    fn proactive_result(&self) -> Option<i64> {
         self.result
     }
 
@@ -102,17 +114,9 @@ impl AioDriver for IoUringDriver {
             .next()
             .expect("No completion entries");
         let usr_data = cqe.user_data();
-        self.result = Some(cqe.result());
-        if (usr_data as i32) == self.signal_fd.as_raw_fd() {
-            let mut buffer = mem::MaybeUninit::<signalfd_siginfo>::uninit();
-            let size = mem::size_of_val(&buffer);
-            let sigbuf = &self.signal_buffer[..cqe.result() as _];
-            let buffer_ptr = buffer.as_mut_ptr() as *mut u8;
-            unsafe {
-                // Copy the data from sigbuf into the uninitialized buffer
-                std::ptr::copy_nonoverlapping(sigbuf.as_ptr(), buffer_ptr, size);
-            }
-            let siginfo = unsafe { buffer.assume_init() };
+        self.result = Some(cqe.result() as _);
+        if usr_data == self.signal_fd.as_raw_fd() as _ {
+            let siginfo = self.load_from_sigbuf(cqe.result() as _);
             Ok(Notification::Signal(Signal::try_from(
                 siginfo.ssi_signo as i32,
             )?))

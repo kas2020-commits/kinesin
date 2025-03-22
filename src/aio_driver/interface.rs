@@ -11,7 +11,7 @@ pub trait AsDriver {
 
     fn is_oneshot(&self) -> bool;
 
-    fn proactive_result(&self) -> Option<i32>;
+    fn proactive_result(&self) -> Option<i64>;
 
     fn register_signal(&mut self, signal: Signal);
 

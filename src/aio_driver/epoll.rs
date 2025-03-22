@@ -7,7 +7,7 @@ use std::{io, os::unix::io::AsRawFd};
 
 use crate::utils::set_fd_nonblocking;
 
-use super::{AioDriver, Notification};
+use super::{AsDriver, Notification};
 
 pub struct EpollDriver {
     mask: SigSet,
@@ -32,7 +32,7 @@ impl EpollDriver {
         set_fd_nonblocking(signal_fd.as_raw_fd()).expect("Couldn't set signal_fd to O_NONBLOCK");
 
         // Register the signal fd with epoll
-        let event = EpollEvent::new(EpollFlags::EPOLLIN, signal_fd.as_raw_fd() as u64);
+        let event = EpollEvent::new(EpollFlags::EPOLLIN, signal_fd.as_raw_fd() as _);
         epoll.add(&signal_fd, event).unwrap();
 
         Self {
@@ -44,7 +44,7 @@ impl EpollDriver {
     }
 }
 
-impl AioDriver for EpollDriver {
+impl AsDriver for EpollDriver {
     fn is_proactive(&self) -> bool {
         false
     }
@@ -53,7 +53,7 @@ impl AioDriver for EpollDriver {
         false
     }
 
-    fn proactive_result(&self) -> Option<i32> {
+    fn proactive_result(&self) -> Option<i64> {
         None
     }
 

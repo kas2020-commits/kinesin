@@ -65,7 +65,6 @@ where
                     Signal::SIGCHLD => {
                         let _ = self.registry.reap_children();
                     }
-
                     _ => todo!(),
                 },
                 Notification::File(fd) => {
