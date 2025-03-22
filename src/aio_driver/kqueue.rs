@@ -9,6 +9,7 @@ use super::AsDriver;
 
 pub struct KqueueDriver {
     kq: OwnedFd,
+    data: Option<i64>,
 }
 
 impl KqueueDriver {
@@ -19,7 +20,7 @@ impl KqueueDriver {
             panic!();
         }
         let kq = unsafe { std::os::fd::OwnedFd::from_raw_fd(kq_fd) };
-        Self { kq }
+        Self { kq, data: None }
     }
 }
 
@@ -28,8 +29,8 @@ impl AsDriver for KqueueDriver {
         false
     }
 
-    fn proactive_result(&self) -> Option<i32> {
-        None
+    fn get_data(&self) -> Option<i64> {
+        self.data
     }
 
     fn is_oneshot(&self) -> bool {
@@ -101,6 +102,7 @@ impl AsDriver for KqueueDriver {
             panic!();
         }
         let event = eventlist[0];
+        self.data = Some(event.data);
         if event.filter == EventFilter::EVFILT_SIGNAL {
             Ok(super::Notification::Signal(Signal::try_from(
                 event.ident as i32,
