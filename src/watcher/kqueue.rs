@@ -1,11 +1,10 @@
-use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-
+use super::{AsDriver, Notification};
+use crate::buffd::BufFd;
 use kqueue_sys::{kevent, kqueue, EventFilter, EventFlag, FilterFlag};
 use nix::errno::Errno;
 use nix::sys::signal::Signal;
-
-use super::AsDriver;
+use std::io;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 pub struct KqueueDriver {
     kq: OwnedFd,
@@ -61,7 +60,7 @@ impl AsDriver for KqueueDriver {
         }
     }
 
-    fn register_fd(&mut self, buf_fd: &mut crate::buffd::BufFd) {
+    fn register_fd(&mut self, buf_fd: &mut BufFd) {
         let event = kevent::new(
             buf_fd.as_raw_fd() as _,
             EventFilter::EVFILT_READ,
@@ -85,7 +84,7 @@ impl AsDriver for KqueueDriver {
         }
     }
 
-    fn block_next_notif(&mut self) -> io::Result<super::Notification> {
+    fn block_next_notif(&mut self) -> io::Result<Notification> {
         let mut eventlist: [kevent; 1] = unsafe { std::mem::zeroed() };
         if unsafe {
             kevent(
@@ -104,11 +103,9 @@ impl AsDriver for KqueueDriver {
         let event = eventlist[0];
         self.data = Some(event.data);
         if event.filter == EventFilter::EVFILT_SIGNAL {
-            Ok(super::Notification::Signal(Signal::try_from(
-                event.ident as i32,
-            )?))
+            Ok(Notification::Signal(Signal::try_from(event.ident as i32)?))
         } else {
-            Ok(super::Notification::File(event.ident as _))
+            Ok(Notification::File(event.ident as _))
         }
     }
 }

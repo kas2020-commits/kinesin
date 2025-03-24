@@ -16,24 +16,21 @@
 //!              lifetime semantics and odd references in the driver
 //!              implementation itself. The second, and more important issue
 //!              is that io_uring is the only backend which supports this.
-use std::io;
-
 use nix::sys::signal::Signal;
+use std::io;
+use std::os::fd::RawFd;
 
-use crate::buffd::BufFd;
+pub enum Event<'a> {
+    Signal(Signal),
+    File(RawFd, &'a [u8]),
+}
 
-use super::Notification;
+pub trait AsWatcher {
+    fn watch_signal(&mut self, signal: Signal);
 
-pub trait AsDriver {
-    fn is_proactive(&self) -> bool;
+    fn watch_fd(&mut self, fd: RawFd);
 
-    fn is_oneshot(&self) -> bool;
+    fn poll_block(&mut self) -> io::Result<Option<Event>>;
 
-    fn get_data(&self) -> Option<i64>;
-
-    fn register_signal(&mut self, signal: Signal);
-
-    fn register_fd(&mut self, buf_fd: &mut BufFd);
-
-    fn block_next_notif(&mut self) -> io::Result<Notification>;
+    fn poll_no_block(&mut self) -> io::Result<Option<Event>>;
 }

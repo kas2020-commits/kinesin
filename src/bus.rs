@@ -25,6 +25,10 @@ impl Bus {
     }
 
     pub fn flush(&mut self) -> io::Result<()> {
+        if self.len == 0 {
+            return Ok(());
+        }
+
         // Execute all callbacks on the current buffer
         for consumer in &mut self.consumers {
             consumer.write(&self.buffer[..self.len])?;
@@ -35,8 +39,8 @@ impl Bus {
         Ok(())
     }
 
-    pub fn consume(&mut self, dat: &[u8]) -> io::Result<()> {
-        let num_bytes = dat.len();
+    pub fn consume(&mut self, data: &[u8]) -> io::Result<()> {
+        let num_bytes = data.len();
         let mut bytes_left = num_bytes;
 
         // if self.read_buffer.len() == self.write_buffer.len() this loop is bounded to
@@ -48,7 +52,7 @@ impl Bus {
 
             // slice out the part of the log we're going to use
             let start_idx = num_bytes - bytes_left;
-            let slice = &dat[start_idx..start_idx + bytes_to_consume];
+            let slice = &data[start_idx..start_idx + bytes_to_consume];
 
             // Copy the data into the buffer
             self.buffer[self.len..self.len + bytes_to_consume].copy_from_slice(slice);
@@ -68,16 +72,16 @@ impl Bus {
     }
 }
 
-impl Drop for Bus {
-    fn drop(&mut self) {
-        // Ensure the buffer is flushed when the struct is dropped
-        if self.len > 0 {
-            match self.flush() {
-                Ok(_) => (),
-                Err(e) => {
-                    eprintln!("Failed to flush buffer: {}", e);
-                }
-            }
-        }
-    }
-}
+// impl Drop for Bus {
+//     fn drop(&mut self) {
+//         // Ensure the buffer is flushed when the struct is dropped
+//         if self.len > 0 {
+//             match self.flush() {
+//                 Ok(_) => (),
+//                 Err(e) => {
+//                     eprintln!("Failed to flush buffer: {}", e);
+//                 }
+//             }
+//         }
+//     }
+// }

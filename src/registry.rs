@@ -54,8 +54,8 @@ impl Registry {
         Self { service_map }
     }
 
-    pub fn reap_children(&mut self) -> Vec<Pid> {
-        let mut pids = Vec::new();
+    pub fn reap_children(&mut self) -> Vec<Service> {
+        let mut srvcs = Vec::new();
         loop {
             match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
                 Ok(WaitStatus::Exited(pid, status)) => {
@@ -63,11 +63,12 @@ impl Registry {
                         eprintln!("Critical Service Failed. Must Terminate...");
                         exit(status);
                     }
-                    self.drop(pid);
-                    pids.push(pid);
+                    if let Some(srvc) = self.remove(pid) {
+                        srvcs.push(srvc);
+                    }
                 }
                 Ok(WaitStatus::Signaled(pid, _, _)) => {
-                    self.drop(pid);
+                    self.remove(pid);
                 }
                 Ok(WaitStatus::StillAlive) => break,
                 Err(nix::errno::Errno::ECHILD) => break, // No more children
@@ -78,7 +79,7 @@ impl Registry {
                 _ => {}
             }
         }
-        pids
+        srvcs
     }
 
     pub fn is_empty(&self) -> bool {
@@ -86,18 +87,20 @@ impl Registry {
     }
 
     pub fn get_by_fd(&self, fd: RawFd) -> Option<&Service> {
-        self.service_map
-            .values()
-            .find(|&srvc| fd == srvc.stdout.as_raw_fd() || fd == srvc.stderr.as_raw_fd())
+        self.service_map.values().find(|&srvc| {
+            srvc.stdout.map(|x| fd == x).unwrap_or(false)
+                || srvc.stderr.map(|x| fd == x).unwrap_or(false)
+        })
     }
 
     pub fn get_by_fd_mut(&mut self, fd: RawFd) -> Option<&mut Service> {
-        self.service_map
-            .values_mut()
-            .find(|srvc| fd == srvc.stdout.as_raw_fd() || fd == srvc.stderr.as_raw_fd())
+        self.service_map.values_mut().find(|srvc| {
+            srvc.stdout.map(|x| fd == x).unwrap_or(false)
+                || srvc.stderr.map(|x| fd == x).unwrap_or(false)
+        })
     }
 
-    pub fn drop(&mut self, pid: Pid) {
+    pub fn remove(&mut self, pid: Pid) -> Option<Service> {
         let mut name: Option<String> = None;
         for srvc in self.service_map.values() {
             if srvc.pid == pid {
@@ -106,7 +109,9 @@ impl Registry {
             }
         }
         if let Some(srvc_name) = name {
-            self.service_map.remove(&srvc_name);
+            self.service_map.remove(&srvc_name)
+        } else {
+            None
         }
     }
 }

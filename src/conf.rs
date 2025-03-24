@@ -1,5 +1,5 @@
 //! The Serializable configuration data structures used for setup.
-use std::path::PathBuf;
+use std::{ffi::CString, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -34,10 +34,10 @@ pub struct ServiceConf {
     #[serde(default = "default_cfg_stderr")]
     pub stderr: bool,
 
-    pub exec: Vec<String>,
+    pub exec: Vec<CString>,
 
     #[serde(default = "default_cfg_env")]
-    pub env: Vec<String>,
+    pub env: Vec<CString>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -60,6 +60,6 @@ fn default_cfg_stderr() -> bool {
     true
 }
 
-fn default_cfg_env() -> Vec<String> {
+fn default_cfg_env() -> Vec<CString> {
     Vec::new()
 }
