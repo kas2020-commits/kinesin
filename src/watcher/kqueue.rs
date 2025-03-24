@@ -1,111 +1,107 @@
-use super::{AsDriver, Notification};
+use super::{AsWatcher, Event};
 use crate::buffd::BufFd;
-use kqueue_sys::{kevent, kqueue, EventFilter, EventFlag, FilterFlag};
-use nix::errno::Errno;
+use nix::libc::timespec;
+use nix::sys::event::{EventFilter, EventFlag, FilterFlag, KEvent, Kqueue};
 use nix::sys::signal::Signal;
+use std::collections::{HashMap, HashSet};
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::RawFd;
 
-pub struct KqueueDriver {
-    kq: OwnedFd,
-    data: Option<i64>,
+const NO_TIME_WAIT: timespec = unsafe { std::mem::zeroed() };
+
+pub struct KqueueWatcher {
+    kq: Kqueue,
+    sigstore: HashSet<Signal>,
+    fdstore: HashMap<RawFd, BufFd>,
 }
 
-impl KqueueDriver {
+impl KqueueWatcher {
     pub fn new() -> Self {
-        let kq_fd = unsafe { kqueue() };
-        if kq_fd == -1 {
-            eprintln!("Couldn't initialize the kqueue: {}", Errno::last());
+        let kq = Kqueue::new().unwrap();
+        let sigstore = HashSet::new();
+        let fdstore = HashMap::new();
+        Self {
+            kq,
+            sigstore,
+            fdstore,
+        }
+    }
+
+    fn poll_internal(&mut self, block: bool) -> io::Result<Option<Event>> {
+        let mut eventlist: [KEvent; 1] = unsafe { std::mem::zeroed() };
+        let num_events = self
+            .kq
+            .kevent(
+                &[],
+                &mut eventlist,
+                if block { None } else { Some(NO_TIME_WAIT) },
+            )
+            .unwrap();
+        if num_events == 0 {
+            return Ok(None);
+        }
+        let ev = eventlist[0];
+        if ev.filter().unwrap() == EventFilter::EVFILT_SIGNAL {
+            Ok(Some(Event::Signal(Signal::try_from(ev.ident() as i32)?)))
+        } else if let Some(buf_fd) = self.fdstore.get_mut(&(ev.ident() as _)) {
+            if buf_fd.read(Some(ev.data() as _))? > 0 {
+                Ok(Some(Event::File(ev.ident() as _, buf_fd.data())))
+            } else {
+                Ok(None)
+            }
+        } else {
+            println!("Received an event for an fd not in the store...?");
             panic!();
         }
-        let kq = unsafe { std::os::fd::OwnedFd::from_raw_fd(kq_fd) };
-        Self { kq, data: None }
     }
 }
 
-impl AsDriver for KqueueDriver {
-    fn is_proactive(&self) -> bool {
-        false
-    }
-
-    fn get_data(&self) -> Option<i64> {
-        self.data
-    }
-
-    fn is_oneshot(&self) -> bool {
-        false
-    }
-
-    fn register_signal(&mut self, signal: Signal) {
-        let sigev = kevent::new(
+impl AsWatcher for KqueueWatcher {
+    fn watch_signal(&mut self, signal: Signal) {
+        if self.sigstore.contains(&signal) {
+            eprintln!("signal already being watched");
+            return;
+        }
+        let ev = KEvent::new(
             signal as _,
             EventFilter::EVFILT_SIGNAL,
-            EventFlag::EV_ADD, // this is implicitly added anyways
+            EventFlag::EV_ADD,
             FilterFlag::empty(),
+            0,
+            0,
         );
-        let changelist = [sigev];
-        if unsafe {
-            kevent(
-                self.kq.as_raw_fd(),
-                changelist.as_ptr() as _,
-                changelist.len() as _,
-                core::ptr::null_mut(),
-                0,
-                std::ptr::null(),
-            )
-        } == -1
-        {
-            eprintln!("Couldn't register signal kevent: {}", Errno::last());
-            panic!();
-        }
+        let changelist = [ev];
+        self.kq
+            .kevent(&changelist, &mut [], Some(NO_TIME_WAIT))
+            .unwrap();
     }
 
-    fn register_fd(&mut self, buf_fd: &mut BufFd) {
-        let event = kevent::new(
-            buf_fd.as_raw_fd() as _,
+    fn watch_fd(&mut self, fd: RawFd) {
+        if self.fdstore.contains_key(&fd) {
+            eprintln!("fd is already being watched!");
+            return;
+        }
+        let buf_fd = BufFd::new(fd);
+        self.fdstore.insert(fd, buf_fd);
+        let ev = KEvent::new(
+            fd as _,
             EventFilter::EVFILT_READ,
             EventFlag::EV_ADD,
             FilterFlag::empty(),
+            0,
+            0,
         );
-        let changelist = [event];
-        if unsafe {
-            kevent(
-                self.kq.as_raw_fd(),
-                changelist.as_ptr() as _,
-                changelist.len() as _,
-                core::ptr::null_mut(),
-                0,
-                std::ptr::null(),
-            )
-        } == -1
-        {
-            eprintln!("Couldn't register signal kevent: {}", Errno::last());
-            panic!();
-        }
+        let changelist = [ev];
+        self.kq
+            .kevent(&changelist, &mut [], Some(NO_TIME_WAIT))
+            .unwrap();
     }
 
-    fn block_next_notif(&mut self) -> io::Result<Notification> {
-        let mut eventlist: [kevent; 1] = unsafe { std::mem::zeroed() };
-        if unsafe {
-            kevent(
-                self.kq.as_raw_fd(),
-                core::ptr::null(),
-                0,
-                eventlist.as_mut_ptr(),
-                eventlist.len() as _,
-                std::ptr::null(),
-            )
-        } == -1
-        {
-            eprintln!("Couldn't register signal kevent: {}", Errno::last());
-            panic!();
-        }
-        let event = eventlist[0];
-        self.data = Some(event.data);
-        if event.filter == EventFilter::EVFILT_SIGNAL {
-            Ok(Notification::Signal(Signal::try_from(event.ident as i32)?))
-        } else {
-            Ok(Notification::File(event.ident as _))
-        }
+    fn poll_block(&mut self) -> io::Result<Option<Event>> {
+        self.poll_internal(true)
+    }
+
+    fn poll_no_block(&mut self) -> io::Result<Option<Event>> {
+        self.poll_internal(false)
     }
 }

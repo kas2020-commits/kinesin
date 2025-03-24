@@ -17,4 +17,4 @@ pub use epoll::EpollWatcher as Watcher;
 mod kqueue;
 
 #[cfg(any(target_os = "macos", target_os = "freebsd", target_os = "openbsd"))]
-pub use kqueue::KqueueDriver as Driver;
+pub use kqueue::KqueueWatcher as Watcher;
