@@ -1,6 +1,8 @@
-# kinesin
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/0341783e-cd11-4535-a075-e3775f779184" alt="kinesin logo" style="width: 30%; height: auto;">
+</p>
 
-**kinesin** is a lightweight init system and process supervisor for containerized environments, written in Rust! It provides reliable startup, child reaping and management of child processes, with built-in support for stream redirection, external logging, post-death cleanup jobs and more.
+**Kinesin** is a lightweight init system and process supervisor for containerized environments, written in Rust! It provides reliable startup, child reaping and management of child processes, with built-in support for stream redirection, external logging, post-death cleanup jobs and more.
 
 Named after the molecular motor *kinesin*, which transports cellular cargo along microtubules, this project carries your subprocesses with precision, structure, and speed.
 
