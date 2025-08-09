@@ -40,14 +40,14 @@ impl Registry {
             match Service::new(def) {
                 Ok(srvc) => {
                     if let Some(v) = service_map.insert(srvc.name.clone(), srvc) {
-                        eprintln!("Can't have services with the same key!");
-                        eprintln!("Service being replaced: {:#?}", &v);
-                        panic!();
+                        panic!(
+                            "Can't have services with the same key!\nService being replaced: {:#?}",
+                            &v
+                        );
                     }
                 }
                 Err(e) => {
-                    eprintln!("Failed to start {}: {:?}", def.name, e);
-                    panic!();
+                    panic!("Failed to start {}: {:?}", def.name, e);
                 }
             }
         }

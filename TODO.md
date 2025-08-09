@@ -13,4 +13,4 @@
 - [ ] handle SIGINT and SIGTRM to customize death sequence
 
 ## Bugs
-- [ ] efficiently honor when config specifies `stdout = false` or `stderr = false`
+- [x] efficiently honor when config specifies `stdout = false` or `stderr = false`

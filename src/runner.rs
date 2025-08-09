@@ -1,6 +1,6 @@
 //! The supervisor provides a framework-like experience for using this codebase.
 //! Another benifit of this data structure is that it scopes a bounded generic
-//! type, ensuring that the code using the AIO driver backend is not accidentally
+//! type, ensuring that the code using the AIO watcher backend is not accidentally
 //! tied to a specific implementation.
 use std::{collections::HashMap, io, os::fd::RawFd};
 
@@ -40,7 +40,7 @@ pub fn handle_event(
         },
         Event::File(fd, data) => {
             if let Some(bus) = bus_map.get_mut(&fd) {
-                bus.consume(data).unwrap();
+                bus.consume(data)?;
             }
         }
     }

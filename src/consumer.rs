@@ -47,11 +47,15 @@ impl Consumer {
         match self {
             Self::File(x) => x.write(bytes),
             Self::StdOut => {
-                println!("{:#?}", std::str::from_utf8(bytes).unwrap());
+                let stdout = io::stdout();
+                let mut handle = stdout.lock();
+                handle.write(bytes)?;
                 Ok(())
             }
             Self::StdErr => {
-                eprintln!("{:#?}", std::str::from_utf8(bytes).unwrap());
+                let stderr = io::stderr();
+                let mut handle = stderr.lock();
+                handle.write(bytes)?;
                 Ok(())
             }
         }
