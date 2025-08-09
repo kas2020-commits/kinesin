@@ -5,7 +5,7 @@ pub use interface::{AsWatcher, Event};
 mod io_uring;
 
 #[cfg(all(feature = "io-uring", target_os = "linux"))]
-pub use io_uring::IoUringDriver as Watcher;
+pub use io_uring::IoUringWatcher as Watcher;
 
 #[cfg(all(not(feature = "io-uring"), target_os = "linux"))]
 mod epoll;

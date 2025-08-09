@@ -23,7 +23,7 @@ const IO_URING_ENTRIES: u32 = 32;
 // This is based on the size of signalfd_siginfo, please do not change.
 const IO_URING_SIG_BUF_SIZE: usize = 128;
 
-pub struct IoUringDriver {
+pub struct IoUringWatcher {
     mask: SigSet,
     signal_fd: SignalFd,
     signal_buffer: Box<[u8; IO_URING_SIG_BUF_SIZE]>,
@@ -31,7 +31,7 @@ pub struct IoUringDriver {
     fdstore: HashMap<RawFd, BufFd>,
 }
 
-impl IoUringDriver {
+impl IoUringWatcher {
     pub fn new() -> Self {
         let signal_buffer = Box::new([0; IO_URING_SIG_BUF_SIZE]);
 
@@ -144,7 +144,7 @@ impl IoUringDriver {
     }
 }
 
-impl AsWatcher for IoUringDriver {
+impl AsWatcher for IoUringWatcher {
     fn watch_signal(&mut self, signal: Signal) {
         self.mask.add(signal);
         self.signal_fd.set_mask(&self.mask).unwrap();
