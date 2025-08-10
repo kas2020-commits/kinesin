@@ -4,7 +4,10 @@
 //! tied to a specific implementation.
 use std::{collections::HashMap, io, os::fd::RawFd};
 
-use nix::{sys::signal::Signal, unistd::close};
+use nix::{
+    sys::signal::{kill, Signal},
+    unistd::close,
+};
 
 use crate::{
     bus::Bus,
@@ -36,7 +39,23 @@ pub fn handle_event(
                     }
                 }
             }
-            _ => todo!(),
+            Signal::SIGTERM => {
+                for srvc in &registry.services {
+                    if srvc.must_be_up {
+                        kill(srvc.pid, Signal::SIGTERM)?;
+                    }
+                }
+            }
+            Signal::SIGINT => {
+                for srvc in &registry.services {
+                    if srvc.must_be_up {
+                        kill(srvc.pid, Signal::SIGINT)?;
+                    }
+                }
+            }
+            _ => {
+                println!("{:?}", sig);
+            }
         },
         Event::File(fd, data) => {
             if let Some(bus) = bus_map.get_mut(&fd) {

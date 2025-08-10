@@ -60,6 +60,8 @@ pub struct Config {
     #[serde(default = "default_cfg_ver")]
     pub version: u32,
     pub service: Vec<ServiceConf>,
+
+    #[serde(default = "default_consumers")]
     pub consumer: Vec<ConsumerConf>,
 }
 
@@ -69,6 +71,10 @@ fn default_src_config() -> SourceConf {
         read_bufsize: default_read_bufsize(),
         bus_bufsize: default_bus_bufsize(),
     }
+}
+
+fn default_consumers() -> Vec<ConsumerConf> {
+    Vec::new()
 }
 
 fn default_cfg_ver() -> u32 {

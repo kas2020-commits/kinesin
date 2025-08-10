@@ -16,7 +16,7 @@ use crate::registry::Registry;
 use crate::runner::run;
 use crate::watcher::{AsWatcher, Watcher};
 use clap::Parser;
-use nix::sys::signal::{SigSet, Signal};
+use nix::sys::signal::SigSet;
 use std::collections::HashMap;
 use std::{fs, io};
 
@@ -34,17 +34,9 @@ fn get_config() -> Config {
     config
 }
 
-/// This makes the thread no longer get interupted for signals in our
-/// sigset, preventing split-brain issues by letting us respond to the
-/// signal as a notification instead of as a special case.
-fn block_signal_interupts() {
-    let mut mask = SigSet::empty();
-    mask.add(Signal::SIGCHLD);
-    mask.thread_block().unwrap();
-}
-
 fn main() -> io::Result<()> {
-    block_signal_interupts();
+    // We handle signals in the event loop, so block them all from interupting.
+    SigSet::all().thread_block().unwrap();
 
     let config = get_config();
 
@@ -52,11 +44,6 @@ fn main() -> io::Result<()> {
     let mut registry = Registry::new(&config.service);
     let mut watcher = Watcher::new();
     let mut bus_map = HashMap::new();
-
-    // We want to be notified on SIGCHLD
-    // NOTE: This isn't a user-configurable thing since it's part of PID 1's
-    // responsibilities in this scope
-    watcher.watch_signal(Signal::SIGCHLD);
 
     // Register interest in the fds and their associated busses
     for srvc in &mut registry.services {
@@ -71,8 +58,8 @@ fn main() -> io::Result<()> {
     }
 
     // register the consumers into the busses
-    for consumer_conf in config.consumer {
-        let consumer = match consumer_conf.kind {
+    for consumer_conf in &config.consumer {
+        let consumer = match &consumer_conf.kind {
             conf::ConsumerKind::Log(path) => Consumer::File(FileLogger::new(path)?),
             conf::ConsumerKind::StdOut => Consumer::StdOut,
             conf::ConsumerKind::StdErr => Consumer::StdErr,

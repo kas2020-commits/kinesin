@@ -5,6 +5,7 @@
 //! managed here.
 use crate::conf::ServiceConf;
 use crate::utils::{set_fd_nonblocking, set_std_stream};
+use nix::sys::signal::SigSet;
 use nix::{
     errno::Errno,
     fcntl::{open, OFlag},
@@ -77,6 +78,8 @@ impl Service {
                 })
             }
             Ok(ForkResult::Child) => {
+                // remove the blocking of signals for children.
+                SigSet::all().thread_unblock().unwrap();
                 set_std_stream(wout)?;
                 set_std_stream(werr)?;
                 dup2(wout, libc::STDOUT_FILENO).unwrap();

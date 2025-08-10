@@ -17,7 +17,6 @@ use crate::{buffd::BufFd, utils::set_fd_nonblocking};
 use super::{AsWatcher, Event};
 
 pub struct EpollWatcher {
-    mask: SigSet,
     event_buffer: [EpollEvent; 1],
     signal_fd: SignalFd,
     epoll: Epoll,
@@ -28,11 +27,8 @@ impl EpollWatcher {
     pub fn new() -> Self {
         let event_buffer = [EpollEvent::empty(); 1];
 
-        // Setup the Signal Set
-        let mask = SigSet::empty();
-
         // Create the fd for SIGCHLD
-        let signal_fd = SignalFd::new(&mask).unwrap();
+        let signal_fd = SignalFd::new(&SigSet::all()).unwrap();
 
         // create epoll
         let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
@@ -46,7 +42,6 @@ impl EpollWatcher {
         let fdstore = HashMap::new();
 
         Self {
-            mask,
             event_buffer,
             signal_fd,
             epoll,
@@ -92,14 +87,6 @@ impl EpollWatcher {
 }
 
 impl AsWatcher for EpollWatcher {
-    fn watch_signal(&mut self, signal: Signal) {
-        if self.mask.contains(signal) {
-            eprintln!("signal is already being watched!");
-        }
-        self.mask.add(signal);
-        self.signal_fd.set_mask(&self.mask).unwrap();
-    }
-
     fn watch_fd(&mut self, fd: RawFd, buffsize: usize) {
         if self.fdstore.contains_key(&fd) {
             eprintln!("fd is already being watched!");

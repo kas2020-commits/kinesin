@@ -24,7 +24,6 @@ const IO_URING_ENTRIES: u32 = 32;
 const IO_URING_SIG_BUF_SIZE: usize = 128;
 
 pub struct IoUringWatcher {
-    mask: SigSet,
     signal_fd: SignalFd,
     signal_buffer: Box<[u8; IO_URING_SIG_BUF_SIZE]>,
     ring: IoUring,
@@ -33,23 +32,33 @@ pub struct IoUringWatcher {
 
 impl IoUringWatcher {
     pub fn new() -> Self {
-        let signal_buffer = Box::new([0; IO_URING_SIG_BUF_SIZE]);
-
-        // initialize the sigset
-        let mask = SigSet::empty();
+        let mut signal_buffer = Box::new([0; IO_URING_SIG_BUF_SIZE]);
 
         // Create the fd for SIGCHLD
-        let signal_fd = SignalFd::new(&mask).unwrap();
+        let signal_fd = SignalFd::new(&SigSet::all()).unwrap();
 
         set_fd_nonblocking(signal_fd.as_raw_fd()).expect("Couldn't set signal_fd to O_NONBLOCK");
 
         // Setup io_uring
-        let ring = IoUring::new(IO_URING_ENTRIES).unwrap();
+        let mut ring = IoUring::new(IO_URING_ENTRIES).unwrap();
 
         let fdstore = HashMap::new();
 
+        let signal_e = opcode::Read::new(
+            types::Fd(signal_fd.as_raw_fd()),
+            signal_buffer.as_mut_ptr(),
+            signal_buffer.len() as _,
+        )
+        .build()
+        .user_data(signal_fd.as_raw_fd() as _);
+
+        unsafe {
+            ring.submission()
+                .push(&signal_e)
+                .expect("Submission queue is full");
+        }
+
         Self {
-            mask,
             signal_fd,
             ring,
             signal_buffer,
@@ -145,26 +154,6 @@ impl IoUringWatcher {
 }
 
 impl AsWatcher for IoUringWatcher {
-    fn watch_signal(&mut self, signal: Signal) {
-        self.mask.add(signal);
-        self.signal_fd.set_mask(&self.mask).unwrap();
-
-        let signal_e = opcode::Read::new(
-            types::Fd(self.signal_fd.as_raw_fd()),
-            self.signal_buffer.as_mut_ptr(),
-            self.signal_buffer.len() as _,
-        )
-        .build()
-        .user_data(self.signal_fd.as_raw_fd() as _);
-
-        unsafe {
-            self.ring
-                .submission()
-                .push(&signal_e)
-                .expect("Submission queue is full");
-        }
-    }
-
     fn watch_fd(&mut self, fd: RawFd, buffsize: usize) {
         self.fdstore.insert(fd, BufFd::new(fd, buffsize));
         let buf_fd = self.fdstore.get_mut(&fd).unwrap();
