@@ -14,18 +14,16 @@ use nix::errno::Errno;
 
 use std::os::fd::{AsRawFd, RawFd};
 
-const IO_BUFSIZE: usize = 10;
-
 #[derive(Debug)]
 pub struct BufFd {
     fd: RawFd,
-    buffer: Box<[u8; IO_BUFSIZE]>,
+    buffer: Box<[u8]>,
     curr_len: usize,
 }
 
 impl BufFd {
-    pub fn new(fd: RawFd) -> Self {
-        let input_buffer = Box::new([0; IO_BUFSIZE]);
+    pub fn new(fd: RawFd, bufsize: usize) -> Self {
+        let input_buffer = unsafe { Box::new_uninit_slice(bufsize).assume_init() };
         if fcntl::OFlag::from_bits(fcntl::fcntl(fd.as_raw_fd(), fcntl::FcntlArg::F_GETFL).unwrap())
             .unwrap()
             .intersection(OFlag::O_NONBLOCK)
@@ -42,7 +40,7 @@ impl BufFd {
 
     #[cfg(feature = "io-uring")]
     pub fn capacity(&self) -> usize {
-        IO_BUFSIZE
+        self.buffer.len()
     }
 
     #[cfg(feature = "io-uring")]
@@ -66,7 +64,7 @@ impl BufFd {
 
     #[cfg(not(feature = "io-uring"))]
     pub fn read(&mut self, bytes_ready: Option<usize>) -> Result<usize, Errno> {
-        match nix::unistd::read(self.fd.as_raw_fd(), self.buffer.as_mut_slice()) {
+        match nix::unistd::read(self.fd.as_raw_fd(), self.buffer.as_mut()) {
             Ok(0) => {
                 self.curr_len = 0;
                 Ok(0)
@@ -84,8 +82,6 @@ impl BufFd {
                 Ok(n)
             }
             Err(nix::errno::Errno::EAGAIN) => {
-                // we don't mind no more data because we already epoll the fd.
-                // If we need to read more data we will be called again.
                 self.curr_len = 0;
                 Ok(0)
             }

@@ -100,12 +100,12 @@ impl AsWatcher for EpollWatcher {
         self.signal_fd.set_mask(&self.mask).unwrap();
     }
 
-    fn watch_fd(&mut self, fd: RawFd) {
+    fn watch_fd(&mut self, fd: RawFd, buffsize: usize) {
         if self.fdstore.contains_key(&fd) {
             eprintln!("fd is already being watched!");
             return;
         }
-        let buf_fd = BufFd::new(fd);
+        let buf_fd = BufFd::new(fd, buffsize);
         let borrowed_fd = unsafe { BorrowedFd::borrow_raw(fd) };
         // register interest of fd to kernel
         self.epoll

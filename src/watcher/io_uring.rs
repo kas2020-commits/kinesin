@@ -165,8 +165,8 @@ impl AsWatcher for IoUringWatcher {
         }
     }
 
-    fn watch_fd(&mut self, fd: RawFd) {
-        self.fdstore.insert(fd, BufFd::new(fd));
+    fn watch_fd(&mut self, fd: RawFd, buffsize: usize) {
+        self.fdstore.insert(fd, BufFd::new(fd, buffsize));
         let buf_fd = self.fdstore.get_mut(&fd).unwrap();
         let entry = opcode::Read::new(types::Fd(fd), buf_fd.as_mut_ptr(), buf_fd.capacity() as _)
             .build()

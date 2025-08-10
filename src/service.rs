@@ -18,10 +18,12 @@ const DEVNULL: &str = "/dev/null";
 
 #[derive(Debug)]
 pub struct Service {
+    pub def: ServiceConf,
     pub name: String,
     pub pid: Pid,
     pub stdout: Option<RawFd>,
     pub stderr: Option<RawFd>,
+    pub must_be_up: bool,
 }
 
 impl Service {
@@ -34,14 +36,14 @@ impl Service {
         let stdout = rout_owned.into_raw_fd();
         let stderr = rerr_owned.into_raw_fd();
 
-        let wout = if def.stdout {
+        let wout = if def.stdout.watch {
             wout_owned.into_raw_fd()
         } else {
             close(wout_owned.into_raw_fd()).unwrap();
             open(DEVNULL, OFlag::O_WRONLY, nix::sys::stat::Mode::empty()).unwrap()
         };
 
-        let werr = if def.stderr {
+        let werr = if def.stderr.watch {
             werr_owned.into_raw_fd()
         } else {
             close(werr_owned.into_raw_fd()).unwrap();
@@ -53,23 +55,25 @@ impl Service {
                 close(wout).unwrap();
                 close(werr).unwrap();
 
-                if def.stdout {
+                if def.stdout.watch {
                     set_fd_nonblocking(stdout)?;
                 } else {
                     close(stdout).unwrap();
                 }
 
-                if def.stderr {
+                if def.stderr.watch {
                     set_fd_nonblocking(stderr)?;
                 } else {
                     close(stderr).unwrap();
                 }
 
                 Ok(Self {
+                    def: def.clone(),
                     name,
                     pid,
-                    stdout: if def.stdout { Some(stdout) } else { None },
-                    stderr: if def.stderr { Some(stderr) } else { None },
+                    stdout: if def.stdout.watch { Some(stdout) } else { None },
+                    stderr: if def.stderr.watch { Some(stderr) } else { None },
+                    must_be_up: def.must_be_up,
                 })
             }
             Ok(ForkResult::Child) => {

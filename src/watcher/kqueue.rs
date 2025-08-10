@@ -76,12 +76,12 @@ impl AsWatcher for KqueueWatcher {
             .unwrap();
     }
 
-    fn watch_fd(&mut self, fd: RawFd) {
+    fn watch_fd(&mut self, fd: RawFd, buffsize: usize) {
         if self.fdstore.contains_key(&fd) {
             eprintln!("fd is already being watched!");
             return;
         }
-        let buf_fd = BufFd::new(fd);
+        let buf_fd = BufFd::new(fd, buffsize);
         self.fdstore.insert(fd, buf_fd);
         let ev = KEvent::new(
             fd as _,

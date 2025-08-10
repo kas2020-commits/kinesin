@@ -10,65 +10,53 @@ use nix::{
     sys::wait::{waitpid, WaitPidFlag, WaitStatus},
     unistd::Pid,
 };
-use std::{collections::HashMap, os::fd::RawFd, process::exit};
+use std::process::exit;
 
 pub struct Registry {
-    service_map: HashMap<String, Service>,
-}
-
-impl<'a> IntoIterator for &'a Registry {
-    type Item = &'a Service;
-    type IntoIter = std::collections::hash_map::Values<'a, String, Service>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.service_map.values()
-    }
-}
-
-impl<'a> IntoIterator for &'a mut Registry {
-    type Item = &'a mut Service;
-    type IntoIter = std::collections::hash_map::ValuesMut<'a, String, Service>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.service_map.values_mut()
-    }
+    pub services: Vec<Service>,
 }
 
 impl Registry {
     pub fn new(services: &[ServiceConf]) -> Self {
         let num_services = services.len();
-        let mut service_map: HashMap<String, Service> = HashMap::with_capacity(num_services);
+        let mut services_ = Vec::with_capacity(num_services);
         for def in services {
             match Service::new(def) {
                 Ok(srvc) => {
-                    if let Some(v) = service_map.insert(srvc.name.clone(), srvc) {
-                        panic!(
-                            "Can't have services with the same key!\nService being replaced: {:#?}",
-                            &v
-                        );
-                    }
+                    services_.push(srvc);
                 }
                 Err(e) => {
-                    panic!("Failed to start {}: {:?}", def.name, e);
+                    panic!("{:?}", e);
                 }
             }
         }
-        Self { service_map }
+
+        Self {
+            services: services_,
+        }
     }
 
     pub fn reap_children(&mut self) -> Vec<Service> {
-        let mut srvcs = Vec::new();
+        let mut reaped_children = Vec::new();
         loop {
             match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
                 Ok(WaitStatus::Exited(pid, status)) => {
-                    if status != 0 {
-                        eprintln!("Critical Service Failed. Must Terminate...");
-                        exit(status);
-                    }
                     if let Some(srvc) = self.remove(pid) {
-                        srvcs.push(srvc);
+                        if status != 0 && srvc.must_be_up {
+                            eprintln!("Critical Service Failed. Must Terminate...");
+                            exit(status);
+                        }
+                        reaped_children.push(srvc);
                     }
                 }
                 Ok(WaitStatus::Signaled(pid, _, _)) => {
-                    self.remove(pid);
+                    if let Some(srvc) = self.remove(pid) {
+                        if srvc.must_be_up {
+                            eprintln!("Critical Service Failed. Must Terminate...");
+                            exit(-1);
+                        }
+                        reaped_children.push(srvc);
+                    }
                 }
                 Ok(WaitStatus::StillAlive) => break,
                 Err(nix::errno::Errno::ECHILD) => break, // No more children
@@ -79,37 +67,29 @@ impl Registry {
                 _ => {}
             }
         }
-        srvcs
+        reaped_children
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.service_map.is_empty()
+    pub fn get_by_name(&self, name: &str) -> Option<&Service> {
+        self.services.iter().find(|&srvc| srvc.name == name)
     }
 
-    pub fn get_by_fd(&self, fd: RawFd) -> Option<&Service> {
-        self.service_map.values().find(|&srvc| {
-            srvc.stdout.map(|x| fd == x).unwrap_or(false)
-                || srvc.stderr.map(|x| fd == x).unwrap_or(false)
-        })
-    }
-
-    pub fn get_by_fd_mut(&mut self, fd: RawFd) -> Option<&mut Service> {
-        self.service_map.values_mut().find(|srvc| {
-            srvc.stdout.map(|x| fd == x).unwrap_or(false)
-                || srvc.stderr.map(|x| fd == x).unwrap_or(false)
-        })
-    }
+    // pub fn get_by_fd(&self, fd: RawFd) -> Option<&Service> {
+    //     self.services.iter().find(|&srvc| {
+    //         srvc.stdout.map(|x| fd == x).unwrap_or(false)
+    //             || srvc.stderr.map(|x| fd == x).unwrap_or(false)
+    //     })
+    // }
+    // pub fn get_by_fd_mut(&mut self, fd: RawFd) -> Option<&mut Service> {
+    //     self.services.iter_mut().find(|srvc| {
+    //         srvc.stdout.map(|x| fd == x).unwrap_or(false)
+    //             || srvc.stderr.map(|x| fd == x).unwrap_or(false)
+    //     })
+    // }
 
     pub fn remove(&mut self, pid: Pid) -> Option<Service> {
-        let mut name: Option<String> = None;
-        for srvc in self.service_map.values() {
-            if srvc.pid == pid {
-                name = Some(srvc.name.clone());
-                break;
-            }
-        }
-        if let Some(srvc_name) = name {
-            self.service_map.remove(&srvc_name)
+        if let Some(loc) = self.services.iter().position(|srvc| srvc.pid == pid) {
+            Some(self.services.swap_remove(loc))
         } else {
             None
         }

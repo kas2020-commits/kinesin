@@ -56,7 +56,7 @@ where
     W: AsWatcher,
 {
     // block on events
-    while !registry.is_empty() {
+    while !registry.services.is_empty() {
         if let Some(event) = watcher.poll_block()? {
             handle_event(event, registry, bus_map)?;
         }

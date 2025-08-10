@@ -28,7 +28,7 @@ pub enum Event<'a> {
 pub trait AsWatcher {
     fn watch_signal(&mut self, signal: Signal);
 
-    fn watch_fd(&mut self, fd: RawFd);
+    fn watch_fd(&mut self, fd: RawFd, buffsize: usize);
 
     fn poll_block(&mut self) -> io::Result<Option<Event>>;
 

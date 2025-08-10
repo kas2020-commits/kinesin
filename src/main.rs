@@ -20,7 +20,7 @@ use nix::sys::signal::{SigSet, Signal};
 use std::collections::HashMap;
 use std::{fs, io};
 
-fn main() -> io::Result<()> {
+fn get_config() -> Config {
     let cli = Cli::parse();
 
     let config: Config = match cli.config.as_path().extension() {
@@ -31,15 +31,22 @@ fn main() -> io::Result<()> {
         None => panic!("No extension"),
     };
 
-    // This makes the thread no longer get interupted for signals in our
-    // sigset, preventing split-brain issues by letting us respond to the
-    // signal as a notification instead of as a special case.
+    config
+}
+
+/// This makes the thread no longer get interupted for signals in our
+/// sigset, preventing split-brain issues by letting us respond to the
+/// signal as a notification instead of as a special case.
+fn block_signal_interupts() {
     let mut mask = SigSet::empty();
     mask.add(Signal::SIGCHLD);
     mask.thread_block().unwrap();
+}
 
-    // println!("{:#?}", config);
-    // println!("{}", getpid());
+fn main() -> io::Result<()> {
+    block_signal_interupts();
+
+    let config = get_config();
 
     // initialize our main objects
     let mut registry = Registry::new(&config.service);
@@ -51,63 +58,39 @@ fn main() -> io::Result<()> {
     // responsibilities in this scope
     watcher.watch_signal(Signal::SIGCHLD);
 
-    // We register the file descriptors
-    for srvc in &mut registry {
-        // println!("{}, {}", srvc.stdout.as_raw_fd(), srvc.stderr.as_raw_fd());
+    // Register interest in the fds and their associated busses
+    for srvc in &mut registry.services {
         if let Some(stdout) = srvc.stdout {
-            watcher.watch_fd(stdout);
+            watcher.watch_fd(stdout, srvc.def.stdout.read_bufsize);
+            bus_map.insert(stdout, Bus::new(srvc.def.stdout.bus_bufsize));
         }
         if let Some(stderr) = srvc.stderr {
-            watcher.watch_fd(stderr);
+            watcher.watch_fd(stderr, srvc.def.stderr.read_bufsize);
+            bus_map.insert(stderr, Bus::new(srvc.def.stderr.bus_bufsize));
         }
+    }
 
-        let mut stdout_consumers = Vec::new();
-        let mut stderr_consumers = Vec::new();
-
-        if let Some(consumer) = config.consumer.iter().find(|c| match c.consumes.clone() {
-            ProducerConf::StdOut(name) => name == srvc.name,
-            ProducerConf::StdErr(name) => name == srvc.name,
-        }) {
-            match consumer.consumes {
-                ProducerConf::StdOut(_) => match &consumer.kind {
-                    conf::ConsumerKind::Log(path) => {
-                        stdout_consumers.push(Consumer::File(FileLogger::new(path)?));
-                    }
-                    conf::ConsumerKind::StdOut => {
-                        stdout_consumers.push(Consumer::StdOut);
-                    }
-                    conf::ConsumerKind::StdErr => {
-                        stdout_consumers.push(Consumer::StdErr);
-                    }
-                },
-                ProducerConf::StdErr(_) => match &consumer.kind {
-                    conf::ConsumerKind::Log(path) => {
-                        stderr_consumers.push(Consumer::File(FileLogger::new(path)?));
-                    }
-                    conf::ConsumerKind::StdOut => {
-                        stdout_consumers.push(Consumer::StdOut);
-                    }
-                    conf::ConsumerKind::StdErr => {
-                        stdout_consumers.push(Consumer::StdErr);
-                    }
-                },
-            };
+    // register the consumers into the busses
+    for consumer_conf in config.consumer {
+        let consumer = match consumer_conf.kind {
+            conf::ConsumerKind::Log(path) => Consumer::File(FileLogger::new(path)?),
+            conf::ConsumerKind::StdOut => Consumer::StdOut,
+            conf::ConsumerKind::StdErr => Consumer::StdErr,
         };
-
-        if !stdout_consumers.is_empty() {
-            let stdout_bus = Bus::new(stdout_consumers);
-
-            if let Some(stdout) = srvc.stdout {
-                bus_map.insert(stdout, stdout_bus);
-            }
+        let srvc_name = match &consumer_conf.consumes {
+            ProducerConf::StdOut(name) => name,
+            ProducerConf::StdErr(name) => name,
+        };
+        let srvc = registry
+            .get_by_name(srvc_name.as_str())
+            .expect("consumer defined with improper service name");
+        let stream_fd = match &consumer_conf.consumes {
+            ProducerConf::StdOut(_) => srvc.stdout,
+            ProducerConf::StdErr(_) => srvc.stderr,
         }
-
-        if !stderr_consumers.is_empty() {
-            let stderr_bus = Bus::new(stderr_consumers);
-            if let Some(stderr) = srvc.stderr {
-                bus_map.insert(stderr, stderr_bus);
-            }
-        }
+        .expect("trying to consume a stream that's switched off");
+        let bus = bus_map.get_mut(&stream_fd).expect("bus doesn't exist");
+        bus.add_consumer(consumer);
     }
 
     run(&mut registry, &mut bus_map, &mut watcher)?;
