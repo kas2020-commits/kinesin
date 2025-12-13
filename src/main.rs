@@ -60,7 +60,7 @@ fn main() -> io::Result<()> {
     // register the consumers into the busses
     for consumer_conf in &config.consumer {
         let consumer = match &consumer_conf.kind {
-            conf::ConsumerKind::Log(path) => Consumer::File(FileLogger::new(path)?),
+            conf::ConsumerKind::Log(path) => Consumer::File(path.to_path_buf()),
             conf::ConsumerKind::StdOut => Consumer::StdOut,
             conf::ConsumerKind::StdErr => Consumer::StdErr,
         };

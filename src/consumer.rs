@@ -7,6 +7,7 @@
 use std::{
     fs::{File, OpenOptions},
     io::{self, Write},
+    path::PathBuf,
 };
 
 pub struct FileLogger {
@@ -37,7 +38,7 @@ impl FileLogger {
 }
 
 pub enum Consumer {
-    File(FileLogger),
+    File(PathBuf),
     StdOut,
     StdErr,
 }
@@ -45,17 +46,13 @@ pub enum Consumer {
 impl Consumer {
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         match self {
-            Self::File(x) => x.write(bytes),
+            Self::File(x) => FileLogger::new(x)?.write(bytes),
             Self::StdOut => {
-                let stdout = io::stdout();
-                let mut handle = stdout.lock();
-                handle.write_all(bytes)?;
+                io::stdout().lock().write_all(bytes)?;
                 Ok(())
             }
             Self::StdErr => {
-                let stderr = io::stderr();
-                let mut handle = stderr.lock();
-                handle.write_all(bytes)?;
+                io::stderr().lock().write_all(bytes)?;
                 Ok(())
             }
         }
