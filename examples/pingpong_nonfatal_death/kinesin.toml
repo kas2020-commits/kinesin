@@ -1,0 +1,18 @@
+[[service]]
+name = "ping"
+exec = [ "ping.sh" ]
+must_be_up = false
+
+[[service]]
+name = "pong"
+exec = [ "pong.sh" ]
+
+[[consumer]]
+consumes.stdout = "ping"
+kind = "stdout"
+# kind.log = "ping.txt"
+
+[[consumer]]
+consumes.stdout = "pong"
+kind = "stdout"
+# kind.log = "pong.txt"
