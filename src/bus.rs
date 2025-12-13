@@ -4,7 +4,7 @@
 //! distribute data. Ownership-wise, the Bus is designed to own the consumers
 //! but not to own the producers. It's essentially treated as an open well
 //! that you throw data into and hope it reaches the right location.
-use crate::consumer::Consumer;
+use crate::{conf::ConsumerKind, consumer::Consumer};
 use std::{sync::mpsc, thread};
 
 pub type Worker = (mpsc::SyncSender<Box<[u8]>>, thread::JoinHandle<()>);
@@ -22,10 +22,12 @@ impl Bus {
         }
     }
 
-    pub fn add_consumer(&mut self, mut consumer: Consumer) {
+    pub fn add_consumer(&mut self, conf: ConsumerKind) {
         let (tx, tr) = mpsc::sync_channel::<Box<[u8]>>(self.bound);
 
         let handle = thread::spawn(move || {
+            let mut consumer = Consumer::from_conf(conf).unwrap();
+
             while let Ok(bytes) = tr.recv() {
                 let _ = consumer.write(&bytes);
             }

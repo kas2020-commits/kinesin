@@ -11,7 +11,6 @@ mod watcher;
 use crate::bus::Bus;
 use crate::cli::Cli;
 use crate::conf::{Config, ProducerConf};
-use crate::consumer::Consumer;
 use crate::registry::Registry;
 use crate::runner::run;
 use crate::watcher::{AsWatcher, Watcher};
@@ -67,11 +66,6 @@ fn main() -> io::Result<()> {
 
     // register the consumers into the busses
     for consumer_conf in &config.consumer {
-        let consumer = match &consumer_conf.kind {
-            conf::ConsumerKind::Log(path) => Consumer::File(path.to_path_buf()),
-            conf::ConsumerKind::StdOut => Consumer::StdOut,
-            conf::ConsumerKind::StdErr => Consumer::StdErr,
-        };
         let srvc_name = match &consumer_conf.consumes {
             ProducerConf::StdOut(name) => name,
             ProducerConf::StdErr(name) => name,
@@ -84,7 +78,7 @@ fn main() -> io::Result<()> {
             ProducerConf::StdErr(_) => srvc.stderr.as_raw_fd(),
         };
         let bus = bus_map.get_mut(&stream_fd).expect("bus doesn't exist");
-        bus.add_consumer(consumer);
+        bus.add_consumer(consumer_conf.kind.clone());
     }
 
     run(registry, bus_map, watcher)?;

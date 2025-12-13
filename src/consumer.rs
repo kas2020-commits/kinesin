@@ -7,8 +7,9 @@
 use std::{
     fs::{File, OpenOptions},
     io::{self, Write},
-    path::PathBuf,
 };
+
+use crate::conf::ConsumerKind;
 
 pub struct FileLogger {
     file: File,
@@ -37,23 +38,30 @@ impl FileLogger {
     }
 }
 
-#[derive(Clone)]
 pub enum Consumer {
-    File(PathBuf),
-    StdOut,
-    StdErr,
+    File(FileLogger),
+    StdOut(io::Stdout),
+    StdErr(io::Stderr),
 }
 
 impl Consumer {
+    pub fn from_conf(conf: ConsumerKind) -> io::Result<Self> {
+        match conf {
+            ConsumerKind::Log(path) => Ok(Self::File(FileLogger::new(path)?)),
+            ConsumerKind::StdOut => Ok(Self::StdOut(io::stdout())),
+            ConsumerKind::StdErr => Ok(Self::StdErr(io::stderr())),
+        }
+    }
+
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         match self {
-            Self::File(x) => FileLogger::new(x)?.write(bytes),
-            Self::StdOut => {
-                io::stdout().lock().write_all(bytes)?;
+            Self::File(file) => file.write(bytes),
+            Self::StdOut(stdout) => {
+                stdout.lock().write_all(bytes)?;
                 Ok(())
             }
-            Self::StdErr => {
-                io::stderr().lock().write_all(bytes)?;
+            Self::StdErr(stderr) => {
+                stderr.lock().write_all(bytes)?;
                 Ok(())
             }
         }
