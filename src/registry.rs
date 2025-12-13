@@ -35,7 +35,7 @@ impl Registry {
                     services_.push(srvc);
                 }
                 Err(e) => {
-                    panic!("{:?}", e);
+                    panic!("service startup failed with errno {}", e);
                 }
             }
         }
@@ -47,7 +47,7 @@ impl Registry {
 
     pub fn reap_children(&mut self) -> Vec<(Service, ServiceCompletionResult)> {
         let mut reaped_children = Vec::new();
-        loop {
+        'reaploop: loop {
             match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
                 Ok(WaitStatus::Exited(pid, status)) => {
                     if let Some(srvc) = self.remove(pid) {
@@ -59,11 +59,11 @@ impl Registry {
                         reaped_children.push((srvc, ServiceCompletionResult::Signal(sig)));
                     }
                 }
-                Ok(WaitStatus::StillAlive) => break,
-                Err(nix::errno::Errno::ECHILD) => break, // No more children
+                Ok(WaitStatus::StillAlive) => break 'reaploop,
+                Err(nix::errno::Errno::ECHILD) => break 'reaploop, // No more children
                 Err(e) => {
                     eprintln!("Error in waitpid: {:?}", e);
-                    break;
+                    break 'reaploop;
                 }
                 _ => {}
             }
