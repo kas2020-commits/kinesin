@@ -25,6 +25,8 @@ pub struct EpollWatcher {
 
 impl EpollWatcher {
     pub fn new() -> Self {
+        println!("using epoll");
+
         let event_buffer = [EpollEvent::empty(); 1];
 
         // Create the fd for SIGCHLD

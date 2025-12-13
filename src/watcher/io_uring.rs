@@ -32,6 +32,8 @@ pub struct IoUringWatcher {
 
 impl IoUringWatcher {
     pub fn new() -> Self {
+        println!("using io-uring");
+
         let mut signal_buffer = Box::new([0; IO_URING_SIG_BUF_SIZE]);
 
         // Create the fd for SIGCHLD
