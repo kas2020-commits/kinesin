@@ -25,8 +25,9 @@ pub fn handle_event(
             Signal::SIGCHLD => {
                 for srvc in registry.reap_children() {
                     // we don't drop the bus here because this signal may have been
-                    // caught before the final event on the relevent fds. This flush
-                    // is here in case 1 service dies much earlier than other(s)
+                    // caught before the final event on the relevent fds. We also flush
+                    // the bus to avoid consumers waiting an unbounded amount of time
+                    // for other services to complete.
                     if let Some(stdout) = srvc.stdout {
                         if let Some(bus) = bus_map.get_mut(&stdout) {
                             bus.flush()?;
@@ -39,22 +40,10 @@ pub fn handle_event(
                     }
                 }
             }
-            Signal::SIGTERM => {
-                for srvc in &registry.services {
-                    if srvc.must_be_up {
-                        kill(srvc.pid, Signal::SIGTERM)?;
-                    }
-                }
-            }
-            Signal::SIGINT => {
-                for srvc in &registry.services {
-                    if srvc.must_be_up {
-                        kill(srvc.pid, Signal::SIGINT)?;
-                    }
-                }
-            }
             _ => {
-                println!("{:?}", sig);
+                for srvc in &registry.services {
+                    kill(srvc.pid, sig)?;
+                }
             }
         },
         Event::File(fd, data) => {

@@ -53,11 +53,9 @@ impl PollWatcher {
         let is_signal_raised = fds
             .iter()
             .filter(|fd| fd.any().unwrap_or(false))
-            .filter(|fd| fd.as_fd().as_raw_fd() == self.signal_fd.as_raw_fd())
-            .next()
-            .is_some();
+            .any(|fd| fd.as_fd().as_raw_fd() == self.signal_fd.as_raw_fd());
 
-        let maybe_pollfd = fds.iter().filter(|fd| fd.any().unwrap_or(false)).next();
+        let maybe_pollfd = fds.iter().find(|fd| fd.any().unwrap_or(false));
 
         // prioritize signals first
         if is_signal_raised {

@@ -11,7 +11,7 @@ mod watcher;
 use crate::bus::Bus;
 use crate::cli::Cli;
 use crate::conf::{Config, ProducerConf};
-use crate::consumer::{Consumer, FileLogger};
+use crate::consumer::Consumer;
 use crate::registry::Registry;
 use crate::runner::run;
 use crate::watcher::{AsWatcher, Watcher};
