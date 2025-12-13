@@ -8,22 +8,19 @@ use crate::utils::{set_fd_nonblocking, set_std_stream};
 use nix::sys::signal::SigSet;
 use nix::{
     errno::Errno,
-    fcntl::{open, OFlag},
     libc,
-    unistd::{close, dup2, execve, fork, pipe, ForkResult, Pid},
+    unistd::{dup2, execve, fork, pipe, ForkResult, Pid},
 };
 use std::ffi::CString;
-use std::os::fd::{IntoRawFd, RawFd};
-
-const DEVNULL: &str = "/dev/null";
+use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 
 #[derive(Debug)]
 pub struct Service {
     pub def: ServiceConf,
     pub name: String,
     pub pid: Pid,
-    pub stdout: Option<RawFd>,
-    pub stderr: Option<RawFd>,
+    pub stdout: RawFd,
+    pub stderr: RawFd,
     pub must_be_up: bool,
 }
 
@@ -31,61 +28,39 @@ impl Service {
     pub fn new(def: &ServiceConf) -> Result<Self, Errno> {
         let name = def.name.clone();
 
-        let (rout_owned, wout_owned) = pipe()?;
-        let (rerr_owned, werr_owned) = pipe()?;
-
-        let stdout = rout_owned.into_raw_fd();
-        let stderr = rerr_owned.into_raw_fd();
-
-        let wout = if def.stdout.watch {
-            wout_owned.into_raw_fd()
-        } else {
-            close(wout_owned.into_raw_fd()).unwrap();
-            open(DEVNULL, OFlag::O_WRONLY, nix::sys::stat::Mode::empty()).unwrap()
-        };
-
-        let werr = if def.stderr.watch {
-            werr_owned.into_raw_fd()
-        } else {
-            close(werr_owned.into_raw_fd()).unwrap();
-            open(DEVNULL, OFlag::O_WRONLY, nix::sys::stat::Mode::empty()).unwrap()
-        };
+        let (rout, wout) = pipe()?;
+        let (rerr, werr) = pipe()?;
 
         match unsafe { fork() } {
             Ok(ForkResult::Parent { child: pid }) => {
-                close(wout).unwrap();
-                close(werr).unwrap();
+                drop(wout);
+                drop(werr);
 
-                if def.stdout.watch {
-                    set_fd_nonblocking(stdout)?;
-                } else {
-                    close(stdout).unwrap();
-                }
-
-                if def.stderr.watch {
-                    set_fd_nonblocking(stderr)?;
-                } else {
-                    close(stderr).unwrap();
-                }
+                set_fd_nonblocking(rout.as_raw_fd())?;
+                set_fd_nonblocking(rerr.as_raw_fd())?;
 
                 Ok(Self {
                     def: def.clone(),
                     name,
                     pid,
-                    stdout: if def.stdout.watch { Some(stdout) } else { None },
-                    stderr: if def.stderr.watch { Some(stderr) } else { None },
+                    stdout: rout.into_raw_fd(),
+                    stderr: rerr.into_raw_fd(),
                     must_be_up: def.must_be_up,
                 })
             }
             Ok(ForkResult::Child) => {
+                drop(rout);
+                drop(rerr);
+
                 // remove the blocking of signals for children.
                 SigSet::all().thread_unblock().unwrap();
-                set_std_stream(wout)?;
-                set_std_stream(werr)?;
-                dup2(wout, libc::STDOUT_FILENO).unwrap();
-                dup2(werr, libc::STDERR_FILENO).unwrap();
-                close(stdout).unwrap();
-                close(stderr).unwrap();
+
+                set_std_stream(wout.as_raw_fd())?;
+                set_std_stream(werr.as_raw_fd())?;
+
+                dup2(wout.as_raw_fd(), libc::STDOUT_FILENO).unwrap();
+                dup2(werr.as_raw_fd(), libc::STDERR_FILENO).unwrap();
+
                 let mut env_vars = std::env::vars_os()
                     .map(|(k, v)| {
                         CString::new(format!("{}={}", k.to_string_lossy(), v.to_string_lossy()))

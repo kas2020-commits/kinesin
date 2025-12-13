@@ -95,7 +95,7 @@ fn default_read_bufsize() -> usize {
 }
 
 fn default_bus_bufsize() -> usize {
-    0
+    2048
 }
 
 fn default_cfg_env() -> Vec<CString> {

@@ -73,10 +73,20 @@ impl EpollWatcher {
             Ok(Some(Event::Signal(Signal::try_from(
                 siginfo.ssi_signo as i32,
             )?)))
-        } else if let Some(buf_fd) = self.fdstore.get_mut(&(data as _)) {
+        } else if let Some(mut buf_fd) = self.fdstore.remove(&(data as _)) {
             if buf_fd.read(None)? > 0 {
-                Ok(Some(Event::File(data as _, buf_fd.data())))
+                self.fdstore.insert(data as _, buf_fd);
+                Ok(Some(Event::File(
+                    data as _,
+                    self.fdstore.get_mut(&(data as _)).unwrap().data(),
+                )))
             } else {
+                // We also have to de-register interest in the epoll interest tree
+                // otherwise we may receive an event for a closed fd
+                self.epoll.delete(unsafe {
+                    BorrowedFd::borrow_raw(data.try_into().expect("fd out of range"))
+                })?;
+
                 Ok(None)
             }
         } else {

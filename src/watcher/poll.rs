@@ -67,9 +67,13 @@ impl PollWatcher {
             )?)))
         } else if let Some(pollfd) = maybe_pollfd {
             let fd = pollfd.as_fd().as_raw_fd();
-            if let Some(buf_fd) = self.fdstore.get_mut(&fd) {
+            if let Some(mut buf_fd) = self.fdstore.remove(&fd) {
                 if buf_fd.read(None)? > 0 {
-                    Ok(Some(Event::File(fd, buf_fd.data())))
+                    self.fdstore.insert(fd, buf_fd);
+                    Ok(Some(Event::File(
+                        fd,
+                        self.fdstore.get_mut(&fd).unwrap().data(),
+                    )))
                 } else {
                     Ok(None)
                 }

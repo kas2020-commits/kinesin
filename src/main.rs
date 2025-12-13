@@ -18,6 +18,7 @@ use crate::watcher::{AsWatcher, Watcher};
 use clap::Parser;
 use nix::sys::signal::SigSet;
 use std::collections::HashMap;
+use std::os::fd::{AsRawFd, RawFd};
 use std::{fs, io};
 
 fn get_config() -> Config {
@@ -47,13 +48,20 @@ fn main() -> io::Result<()> {
 
     // Register interest in the fds and their associated busses
     for srvc in &mut registry.services {
-        if let Some(stdout) = srvc.stdout {
-            watcher.watch_fd(stdout, srvc.def.stdout.read_bufsize);
-            bus_map.insert(stdout, Bus::new(srvc.def.stdout.bus_bufsize));
+        if srvc.def.stdout.watch {
+            watcher.watch_fd(srvc.stdout.as_raw_fd(), srvc.def.stdout.read_bufsize);
+            bus_map.insert(
+                srvc.stdout.as_raw_fd(),
+                Bus::new(srvc.def.stdout.bus_bufsize),
+            );
         }
-        if let Some(stderr) = srvc.stderr {
-            watcher.watch_fd(stderr, srvc.def.stderr.read_bufsize);
-            bus_map.insert(stderr, Bus::new(srvc.def.stderr.bus_bufsize));
+
+        if srvc.def.stderr.watch {
+            watcher.watch_fd(srvc.stderr.as_raw_fd(), srvc.def.stderr.read_bufsize);
+            bus_map.insert(
+                srvc.stderr.as_raw_fd(),
+                Bus::new(srvc.def.stderr.bus_bufsize),
+            );
         }
     }
 
@@ -71,16 +79,15 @@ fn main() -> io::Result<()> {
         let srvc = registry
             .get_by_name(srvc_name.as_str())
             .expect("consumer defined with improper service name");
-        let stream_fd = match &consumer_conf.consumes {
-            ProducerConf::StdOut(_) => srvc.stdout,
-            ProducerConf::StdErr(_) => srvc.stderr,
-        }
-        .expect("trying to consume a stream that's switched off");
+        let stream_fd: RawFd = match consumer_conf.consumes {
+            ProducerConf::StdOut(_) => srvc.stdout.as_raw_fd(),
+            ProducerConf::StdErr(_) => srvc.stderr.as_raw_fd(),
+        };
         let bus = bus_map.get_mut(&stream_fd).expect("bus doesn't exist");
         bus.add_consumer(consumer);
     }
 
-    run(&mut registry, &mut bus_map, &mut watcher)?;
+    run(registry, bus_map, watcher)?;
 
     Ok(())
 }

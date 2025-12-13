@@ -37,6 +37,7 @@ impl FileLogger {
     }
 }
 
+#[derive(Clone)]
 pub enum Consumer {
     File(PathBuf),
     StdOut,
