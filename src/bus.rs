@@ -43,7 +43,7 @@ impl Bus {
     }
 
     pub fn consume(&mut self, data: &[u8]) -> io::Result<()> {
-        if self.buffer.len() == 0 {
+        if self.buffer.is_empty() {
             for consumer in &mut self.consumers {
                 consumer.write(data)?;
             }

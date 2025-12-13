@@ -78,7 +78,7 @@ impl IoUringWatcher {
         unsafe { buffer.assume_init() }
     }
 
-    fn poll_internal(&mut self, wait: bool) -> io::Result<Option<Event>> {
+    fn poll_internal(&'_ mut self, wait: bool) -> io::Result<Option<Event<'_>>> {
         if wait {
             self.ring.submit_and_wait(1).expect("blocking failed");
         } else {
@@ -163,11 +163,11 @@ impl AsWatcher for IoUringWatcher {
         unsafe { self.ring.submission().push(&entry).unwrap() };
     }
 
-    fn poll_block(&mut self) -> io::Result<Option<Event>> {
+    fn poll_block(&'_ mut self) -> io::Result<Option<Event<'_>>> {
         self.poll_internal(true)
     }
 
-    fn poll_no_block(&mut self) -> io::Result<Option<Event>> {
+    fn poll_no_block(&'_ mut self) -> io::Result<Option<Event<'_>>> {
         self.poll_internal(false)
     }
 }

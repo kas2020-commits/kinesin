@@ -97,8 +97,10 @@ impl Service {
                     env_vars.push(var.clone());
                 }
 
-                execve(&def.exec[0], &def.exec, env_vars.as_slice()).unwrap();
-                unreachable!()
+                match execve(&def.exec[0], &def.exec, env_vars.as_slice()) {
+                    Ok(_) => unreachable!(),
+                    Err(e) => Err(e),
+                }
             }
             Err(e) => Err(e),
         }

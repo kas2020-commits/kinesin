@@ -59,6 +59,7 @@ pub struct ServiceConf {
 pub struct Config {
     #[serde(default = "default_cfg_ver")]
     pub version: u32,
+
     pub service: Vec<ServiceConf>,
 
     #[serde(default = "default_consumers")]

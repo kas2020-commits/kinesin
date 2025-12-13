@@ -1,7 +1,7 @@
 //! Uses clap to define the CLI interface declaratively.
 use std::path::PathBuf;
 
-use clap::{command, Parser};
+use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]

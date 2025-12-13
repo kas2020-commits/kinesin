@@ -49,7 +49,7 @@ impl EpollWatcher {
         }
     }
 
-    fn epoll(&mut self, timeout: EpollTimeout) -> io::Result<Option<Event>> {
+    fn epoll(&'_ mut self, timeout: EpollTimeout) -> io::Result<Option<Event<'_>>> {
         let num_fds = self.epoll.wait(&mut self.event_buffer, timeout)?;
 
         if num_fds > 1 {
@@ -71,17 +71,15 @@ impl EpollWatcher {
             Ok(Some(Event::Signal(Signal::try_from(
                 siginfo.ssi_signo as i32,
             )?)))
-        } else {
-            if let Some(buf_fd) = self.fdstore.get_mut(&(data as _)) {
-                if buf_fd.read(None)? > 0 {
-                    Ok(Some(Event::File(data as _, buf_fd.data())))
-                } else {
-                    Ok(None)
-                }
+        } else if let Some(buf_fd) = self.fdstore.get_mut(&(data as _)) {
+            if buf_fd.read(None)? > 0 {
+                Ok(Some(Event::File(data as _, buf_fd.data())))
             } else {
-                eprintln!("received an event for an fd not in the store...?");
-                panic!();
+                Ok(None)
             }
+        } else {
+            eprintln!("received an event for an fd not in the store...?");
+            panic!();
         }
     }
 }
@@ -102,11 +100,11 @@ impl AsWatcher for EpollWatcher {
         self.fdstore.insert(fd, buf_fd);
     }
 
-    fn poll_block(&mut self) -> io::Result<Option<Event>> {
+    fn poll_block(&'_ mut self) -> io::Result<Option<Event<'_>>> {
         self.epoll(EpollTimeout::NONE)
     }
 
-    fn poll_no_block(&mut self) -> io::Result<Option<Event>> {
+    fn poll_no_block(&'_ mut self) -> io::Result<Option<Event<'_>>> {
         self.epoll(EpollTimeout::ZERO)
     }
 }

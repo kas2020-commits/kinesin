@@ -49,13 +49,13 @@ impl Consumer {
             Self::StdOut => {
                 let stdout = io::stdout();
                 let mut handle = stdout.lock();
-                handle.write(bytes)?;
+                handle.write_all(bytes)?;
                 Ok(())
             }
             Self::StdErr => {
                 let stderr = io::stderr();
                 let mut handle = stderr.lock();
-                handle.write(bytes)?;
+                handle.write_all(bytes)?;
                 Ok(())
             }
         }
