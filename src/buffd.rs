@@ -2,11 +2,11 @@
 //!
 //! This abstraction comes in handy when needing to bundle together a file
 //! descriptor with an associated bytes buffer to perform I/O, where the driver
-//! of the I/O is abstracted away. The benifit is that we provide a stable,
-//! stack-allocated buffer that is garunteed to have the same lifetime
-//! as the file descriptor itself, meaning as long as you can still reference
-//! the file descriptor owned by this struct, you can also reference the buffer
-//! you'd provide to the kernel to get your data I/O performed.
+//! of the I/O is abstracted away. The benifit is that we provide a stable buffer
+//! that is garunteed to have the same lifetime as the file descriptor itself,
+//! meaning as long as you can still reference the file descriptor owned by this
+//! struct, you can also reference the buffer you'd provide to the kernel to get
+//! your data I/O performed.
 use nix::fcntl::{self, OFlag};
 
 #[cfg(not(feature = "io-uring"))]

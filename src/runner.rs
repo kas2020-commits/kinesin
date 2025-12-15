@@ -12,108 +12,53 @@ use nix::{
 use crate::{
     bus::Bus,
     registry::{reap_services, Registry, ServiceCompletionResult},
-    service::Service,
     watcher::{AsWatcher, Event},
 };
 
-pub enum EventResult {
-    ServiceCompletion((Service, ServiceCompletionResult)),
-}
-
-pub fn handle_event(
-    event: Event,
-    registry: &mut Registry,
-    bus_map: &mut HashMap<RawFd, Bus>,
-) -> io::Result<Option<Box<[EventResult]>>> {
-    match event {
-        Event::Signal(sig) => match sig {
-            Signal::SIGCHLD => Ok(Some(
-                reap_services(registry)
-                    .into_iter()
-                    .map(EventResult::ServiceCompletion)
-                    .collect(),
-            )),
-            _ => {
-                for srvc in registry {
-                    kill(srvc.pid, sig)?;
-                }
-
-                Ok(None)
-            }
-        },
-        Event::File(fd, data) => {
-            if let Some(bus) = bus_map.get_mut(&fd) {
-                bus.consume(data);
-            }
-            Ok(None)
-        }
-    }
-}
-
-pub fn run<W>(
-    mut registry: Registry,
-    mut bus_map: HashMap<RawFd, Bus>,
-    mut watcher: W,
-) -> io::Result<()>
+pub fn cleanup<W>(mut registry: Registry, mut bus_map: HashMap<RawFd, Bus>, mut watcher: W)
 where
     W: AsWatcher,
 {
-    // main event loop
-    'eventloop: while !registry.is_empty() {
-        if let Ok(Some(event)) = watcher.poll_block() {
-            if let Ok(Some(completed_services)) = handle_event(event, &mut registry, &mut bus_map) {
-                for event_result in completed_services.iter() {
-                    match event_result {
-                        EventResult::ServiceCompletion((srvc, result)) => {
-                            match result {
-                                ServiceCompletionResult::Status(status) => {
-                                    println!(
-                                        "service {} returned with status {}",
-                                        srvc.name, status
-                                    )
-                                }
-                                ServiceCompletionResult::Signal(signal) => {
-                                    println!("service {} died from signal {:?}", srvc.name, signal)
-                                }
-                            }
-                            if srvc.must_be_up {
-                                println!("Mandatory service dropped. Exiting loop...");
-                                break 'eventloop;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // Any services which haven't naturally died must be shut off
     // This can occur if, for example, a mandatory service dies
     if !registry.is_empty() {
         for srvc in &registry {
-            println!("requesting service {} to gracefully exit", srvc.name);
-            if let Err(e) = kill(srvc.pid, Signal::SIGTERM) {
-                eprintln!("kill failed with errno {}", e);
+            match kill(srvc.pid, Signal::SIGTERM) {
+                Ok(_) => {
+                    println!("Sent SIGTERM to service {}", srvc.name);
+                }
+                Err(e) => {
+                    eprintln!("kill failed with errno {}", e);
+                }
             }
         }
 
-        // give each process a bit of time to gracefully shutdown
-        sleep(5);
+        // poll for graceful shutdown every second to reap services until timeout
+        'graceful_shutdown_loop: for _ in 0..5 {
+            sleep(1);
 
-        // collect the gracefully-shutdown services
-        for (srvc, result) in reap_services(&mut registry) {
-            println!(
-                "service {} gracefully shutdown returning {:?}",
-                srvc.name, result
-            );
+            for (srvc, result) in reap_services(&mut registry) {
+                println!(
+                    "service {} gracefully shutdown returning {:?}",
+                    srvc.name, result
+                );
+            }
+
+            if registry.is_empty() {
+                break 'graceful_shutdown_loop;
+            }
         }
 
         // no more playing nice guy. Activate kill mode!
         for srvc in registry {
-            if let Err(e) = kill(srvc.pid, Signal::SIGKILL) {
-                eprintln!("kill failed with errno {}", e);
+            match kill(srvc.pid, Signal::SIGKILL) {
+                Ok(_) => {
+                    println!("Sent SIGKILL to service {}", srvc.name);
+                }
+                Err(e) => {
+                    eprintln!("kill failed with errno {}", e);
+                }
             }
-            println!("service {} was forcefully killed", srvc.name);
         }
     }
 
@@ -140,6 +85,71 @@ where
             eprintln!("closing file failed with errno {}", e);
         }
     }
+}
+
+pub fn run<W>(
+    mut registry: Registry,
+    mut bus_map: HashMap<RawFd, Bus>,
+    mut watcher: W,
+) -> io::Result<()>
+where
+    W: AsWatcher,
+{
+    // main event loop
+    'eventloop: while !registry.is_empty() {
+        match watcher.poll_block() {
+            Ok(Some(event)) => match event {
+                Event::Signal(sig) => match sig {
+                    // SIGCHLD is meant for us
+                    Signal::SIGCHLD => {
+                        for (srvc, result) in reap_services(&mut registry).into_iter() {
+                            match result {
+                                ServiceCompletionResult::Status(status) => {
+                                    println!(
+                                        "service {} returned with status {}",
+                                        srvc.name, status
+                                    )
+                                }
+                                ServiceCompletionResult::Signal(signal) => {
+                                    println!("service {} died from signal {:?}", srvc.name, signal)
+                                }
+                            }
+                            if srvc.must_be_up {
+                                println!("Mandatory service dropped. Exiting loop...");
+                                break 'eventloop;
+                            }
+                        }
+                    }
+
+                    // forward all other signals as a courtesy
+                    _ => {
+                        for srvc in &registry {
+                            kill(srvc.pid, sig)?;
+                        }
+                    }
+                },
+
+                // push new data to the stream bus
+                Event::File(fd, data) => {
+                    if let Some(bus) = bus_map.get_mut(&fd) {
+                        bus.consume(data);
+                    }
+                }
+            },
+
+            // ignore the nop
+            Ok(None) => {}
+
+            // the watcher hitting an I/O error is real bad. For the sake of
+            // correctness it's best to (gracefully) die
+            Err(e) => {
+                eprintln!("watcher failed with error {}", e);
+                break 'eventloop;
+            }
+        }
+    }
+
+    cleanup(registry, bus_map, watcher);
 
     Ok(())
 }
