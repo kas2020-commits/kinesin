@@ -48,7 +48,10 @@ impl PollWatcher {
 
         let num_fds = poll(fds.as_mut_slice(), timeout)?;
 
-        assert!(num_fds >= 1);
+        // return early if no events to report
+        if num_fds == 0 {
+            return Ok(None);
+        }
 
         let is_signal_raised = fds
             .iter()
