@@ -13,6 +13,7 @@ use crate::cli::Cli;
 use crate::conf::{Config, ProducerConf};
 use crate::registry::Registry;
 use crate::runner::run;
+use crate::service::Service;
 use crate::watcher::{AsWatcher, Watcher};
 use clap::Parser;
 use nix::sys::signal::SigSet;
@@ -41,26 +42,37 @@ fn main() -> io::Result<()> {
     let config = get_config();
 
     // initialize our main objects
-    let mut registry = Registry::new(&config.service);
+    // let mut registry = Registry::new();
+    let mut registry = Registry::new();
     let mut watcher = Watcher::new();
     let mut bus_map = HashMap::new();
 
-    // Register interest in the fds and their associated busses
-    for srvc in &mut registry.services {
-        if srvc.def.stdout.watch {
-            watcher.watch_fd(srvc.stdout.as_raw_fd(), srvc.def.stdout.read_bufsize);
-            bus_map.insert(
-                srvc.stdout.as_raw_fd(),
-                Bus::new(srvc.def.stdout.bus_bufsize),
-            );
-        }
-
-        if srvc.def.stderr.watch {
-            watcher.watch_fd(srvc.stderr.as_raw_fd(), srvc.def.stderr.read_bufsize);
-            bus_map.insert(
-                srvc.stderr.as_raw_fd(),
-                Bus::new(srvc.def.stderr.bus_bufsize),
-            );
+    // Start the services and add them to the registry
+    for srvc_conf in &config.service {
+        match Service::new(srvc_conf) {
+            Ok(srvc) => {
+                if srvc_conf.stdout.watch {
+                    watcher.watch_fd(srvc.stdout.as_raw_fd(), srvc_conf.stdout.read_bufsize);
+                    bus_map.insert(
+                        srvc.stdout.as_raw_fd(),
+                        Bus::new(srvc_conf.stdout.bus_bufsize),
+                    );
+                }
+                if srvc_conf.stderr.watch {
+                    watcher.watch_fd(srvc.stderr.as_raw_fd(), srvc_conf.stderr.read_bufsize);
+                    bus_map.insert(
+                        srvc.stderr.as_raw_fd(),
+                        Bus::new(srvc_conf.stderr.bus_bufsize),
+                    );
+                }
+                registry.push(srvc);
+            }
+            Err(e) => {
+                panic!(
+                    "Service {} failed to start up with errno {}",
+                    srvc_conf.name, e
+                );
+            }
         }
     }
 
@@ -70,15 +82,21 @@ fn main() -> io::Result<()> {
             ProducerConf::StdOut(name) => name,
             ProducerConf::StdErr(name) => name,
         };
+
         let srvc = registry
-            .get_by_name(srvc_name.as_str())
+            .iter()
+            .find(|&srvc| srvc.name == *srvc_name)
             .expect("consumer defined with improper service name");
+
         let stream_fd: RawFd = match consumer_conf.consumes {
             ProducerConf::StdOut(_) => srvc.stdout.as_raw_fd(),
             ProducerConf::StdErr(_) => srvc.stderr.as_raw_fd(),
         };
-        let bus = bus_map.get_mut(&stream_fd).expect("bus doesn't exist");
-        bus.add_consumer(consumer_conf.kind.clone());
+
+        bus_map
+            .get_mut(&stream_fd)
+            .expect("bus doesn't exist")
+            .add_consumer(consumer_conf.kind.clone());
     }
 
     run(registry, bus_map, watcher)?;

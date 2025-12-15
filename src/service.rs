@@ -16,7 +16,6 @@ use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 
 #[derive(Debug)]
 pub struct Service {
-    pub def: ServiceConf,
     pub name: String,
     pub pid: Pid,
     pub stdout: RawFd,
@@ -40,7 +39,6 @@ impl Service {
                 set_fd_nonblocking(rerr.as_raw_fd())?;
 
                 Ok(Self {
-                    def: def.clone(),
                     name,
                     pid,
                     stdout: rout.into_raw_fd(),

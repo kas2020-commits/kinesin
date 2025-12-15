@@ -5,7 +5,7 @@
 //! through lifetime semantics, so by simply dropping ownership of the service
 //! struct, you initiate the kill sequence. This model treats services as
 //! resources that get cleaned up through scope, which is extremely handy.
-use crate::{conf::ServiceConf, service::Service};
+use crate::service::Service;
 use nix::{
     libc::c_int,
     sys::{
@@ -21,65 +21,38 @@ pub enum ServiceCompletionResult {
     Signal(Signal),
 }
 
-pub struct Registry {
-    pub services: Vec<Service>,
+pub type Registry = Vec<Service>;
+
+fn remove_by_pid(reg: &mut Registry, pid: Pid) -> Option<Service> {
+    if let Some(loc) = reg.iter().position(|srvc| srvc.pid == pid) {
+        Some(reg.swap_remove(loc))
+    } else {
+        None
+    }
 }
 
-impl Registry {
-    pub fn new(services: &[ServiceConf]) -> Self {
-        let num_services = services.len();
-        let mut services_ = Vec::with_capacity(num_services);
-        for def in services {
-            match Service::new(def) {
-                Ok(srvc) => {
-                    services_.push(srvc);
-                }
-                Err(e) => {
-                    panic!("service startup failed with errno {}", e);
+pub fn reap_services(reg: &mut Registry) -> Vec<(Service, ServiceCompletionResult)> {
+    let mut reaped_children = Vec::new();
+    'reaploop: loop {
+        match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
+            Ok(WaitStatus::Exited(pid, status)) => {
+                if let Some(srvc) = remove_by_pid(reg, pid) {
+                    reaped_children.push((srvc, ServiceCompletionResult::Status(status)));
                 }
             }
-        }
-
-        Self {
-            services: services_,
-        }
-    }
-
-    pub fn reap_children(&mut self) -> Vec<(Service, ServiceCompletionResult)> {
-        let mut reaped_children = Vec::new();
-        'reaploop: loop {
-            match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
-                Ok(WaitStatus::Exited(pid, status)) => {
-                    if let Some(srvc) = self.remove(pid) {
-                        reaped_children.push((srvc, ServiceCompletionResult::Status(status)));
-                    }
+            Ok(WaitStatus::Signaled(pid, sig, _)) => {
+                if let Some(srvc) = remove_by_pid(reg, pid) {
+                    reaped_children.push((srvc, ServiceCompletionResult::Signal(sig)));
                 }
-                Ok(WaitStatus::Signaled(pid, sig, _)) => {
-                    if let Some(srvc) = self.remove(pid) {
-                        reaped_children.push((srvc, ServiceCompletionResult::Signal(sig)));
-                    }
-                }
-                Ok(WaitStatus::StillAlive) => break 'reaploop,
-                Err(nix::errno::Errno::ECHILD) => break 'reaploop, // No more children
-                Err(e) => {
-                    eprintln!("Error in waitpid: {:?}", e);
-                    break 'reaploop;
-                }
-                _ => {}
             }
-        }
-        reaped_children
-    }
-
-    pub fn get_by_name(&self, name: &str) -> Option<&Service> {
-        self.services.iter().find(|&srvc| srvc.name == name)
-    }
-
-    pub fn remove(&mut self, pid: Pid) -> Option<Service> {
-        if let Some(loc) = self.services.iter().position(|srvc| srvc.pid == pid) {
-            Some(self.services.swap_remove(loc))
-        } else {
-            None
+            Ok(WaitStatus::StillAlive) => break 'reaploop,
+            Err(nix::errno::Errno::ECHILD) => break 'reaploop, // No more children
+            Err(e) => {
+                eprintln!("Error in waitpid: {:?}", e);
+                break 'reaploop;
+            }
+            _ => {}
         }
     }
+    reaped_children
 }

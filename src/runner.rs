@@ -11,7 +11,7 @@ use nix::{
 
 use crate::{
     bus::Bus,
-    registry::{Registry, ServiceCompletionResult},
+    registry::{reap_services, Registry, ServiceCompletionResult},
     service::Service,
     watcher::{AsWatcher, Event},
 };
@@ -28,14 +28,13 @@ pub fn handle_event(
     match event {
         Event::Signal(sig) => match sig {
             Signal::SIGCHLD => Ok(Some(
-                registry
-                    .reap_children()
+                reap_services(registry)
                     .into_iter()
                     .map(EventResult::ServiceCompletion)
                     .collect(),
             )),
             _ => {
-                for srvc in &registry.services {
+                for srvc in registry {
                     kill(srvc.pid, sig)?;
                 }
 
@@ -60,7 +59,7 @@ where
     W: AsWatcher,
 {
     // main event loop
-    'eventloop: while !registry.services.is_empty() {
+    'eventloop: while !registry.is_empty() {
         if let Ok(Some(event)) = watcher.poll_block() {
             if let Ok(Some(completed_services)) = handle_event(event, &mut registry, &mut bus_map) {
                 for event_result in completed_services.iter() {
@@ -90,8 +89,8 @@ where
 
     // Any services which haven't naturally died must be shut off
     // This can occur if, for example, a mandatory service dies
-    if !registry.services.is_empty() {
-        for srvc in &registry.services {
+    if !registry.is_empty() {
+        for srvc in &registry {
             println!("requesting service {} to gracefully exit", srvc.name);
             if let Err(e) = kill(srvc.pid, Signal::SIGTERM) {
                 eprintln!("kill failed with errno {}", e);
@@ -102,7 +101,7 @@ where
         sleep(5);
 
         // collect the gracefully-shutdown services
-        for (srvc, result) in registry.reap_children() {
+        for (srvc, result) in reap_services(&mut registry) {
             println!(
                 "service {} gracefully shutdown returning {:?}",
                 srvc.name, result
@@ -110,7 +109,7 @@ where
         }
 
         // no more playing nice guy. Activate kill mode!
-        for srvc in registry.services {
+        for srvc in registry {
             if let Err(e) = kill(srvc.pid, Signal::SIGKILL) {
                 eprintln!("kill failed with errno {}", e);
             }
@@ -130,7 +129,6 @@ where
             // skip any remaining signals during shutdown
             _ => {}
         }
-        // handle_event(event, &mut registry, &mut bus_map)?;
     }
 
     // drop the watcher before closing any fds as a safety measure
